@@ -357,11 +357,21 @@ impl<'a> Generator<'a> {
         if self.conf.is_dummy(ros) {
             return self.wrapper(ros, &conda, &version, &xml).map(Some);
         }
-        let build_type = xml.build_type();
+        // No <build_type> means catkin (REP 140). In ROS 2 that is a CMake package,
+        // an ament one when it builds with ament_cmake (e.g. async_web_server_cpp,
+        // mrt_cmake_modules, which only declare build types for ROS 1).
+        let undeclared_ament = xml.export.build_type.is_none()
+            && names(&[&xml.dependencies.buildtool_depends])
+                .iter()
+                .any(|d| d.starts_with("ament_cmake"));
+        let build_type = if undeclared_ament {
+            "ament_cmake".to_string()
+        } else {
+            xml.build_type()
+        };
         let script_base = match build_type.as_str() {
             "ament_cmake" => "ament_cmake",
             "ament_python" => "ament_python",
-            // no <build_type> means catkin (REP 140): in ROS 2, a plain CMake package
             "cmake" | "catkin" => "cmake",
             other => {
                 eprintln!("{ros}: unsupported build type {other}");

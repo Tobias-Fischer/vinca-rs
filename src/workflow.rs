@@ -152,6 +152,113 @@ impl Clock<'_> {
     }
 }
 
+/// The recipes to schedule: legacy-name aliases (trivial recipes with one
+/// non-trivial dependency) ride along with that dependency, and each recipe knows
+/// how much work depends on it.
+struct Graph<'a> {
+    followers: BTreeMap<String, Vec<String>>,
+    sched: Vec<&'a String>,
+    deps: HashMap<&'a String, BTreeSet<String>>,
+    dependents: HashMap<String, Vec<&'a String>>,
+    /// longest chain of work from the recipe to the end
+    prio: HashMap<&'a String, f64>,
+}
+
+impl<'a> Graph<'a> {
+    fn new(recipes: &'a BTreeMap<String, Recipe>, clock: &Clock) -> Result<Self> {
+        levels(recipes)?; // no cycles
+        let mut followers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut leader: HashMap<&String, &String> = HashMap::new();
+        for (n, r) in recipes {
+            let real: Vec<&String> = r.deps.iter().filter(|d| !recipes[*d].trivial).collect();
+            if r.trivial && real.len() == 1 {
+                followers.entry(real[0].clone()).or_default().push(n.clone());
+                leader.insert(n, real[0]);
+            }
+        }
+        let lead =
+            |n: &String| -> String { leader.get(n).map(|l| (*l).clone()).unwrap_or_else(|| n.clone()) };
+        let sched: Vec<&String> = recipes.keys().filter(|n| !leader.contains_key(n)).collect();
+        let deps: HashMap<&String, BTreeSet<String>> = sched
+            .iter()
+            .map(|n| {
+                let mut d: BTreeSet<String> = recipes[*n].deps.iter().map(lead).collect();
+                d.extend(
+                    followers
+                        .get(*n)
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|f| recipes[f].deps.iter().map(lead)),
+                );
+                d.remove(*n);
+                (*n, d)
+            })
+            .collect();
+        let mut dependents: HashMap<String, Vec<&String>> = HashMap::new();
+        for (n, ds) in &deps {
+            for d in ds {
+                dependents.entry(d.clone()).or_default().push(n);
+            }
+        }
+        fn rest(
+            n: &str,
+            g: &HashMap<String, Vec<&String>>,
+            clock: &Clock,
+            memo: &mut HashMap<String, f64>,
+        ) -> f64 {
+            if let Some(v) = memo.get(n) {
+                return *v;
+            }
+            let tail = g
+                .get(n)
+                .into_iter()
+                .flatten()
+                .map(|m| rest(m, g, clock, memo))
+                .fold(0.0, f64::max);
+            let v = clock.secs(n) + tail;
+            memo.insert(n.to_string(), v);
+            v
+        }
+        let mut memo = HashMap::new();
+        let prio = sched
+            .iter()
+            .map(|n| (*n, rest(n, &dependents, clock, &mut memo)))
+            .collect();
+        Ok(Self {
+            followers,
+            sched,
+            deps,
+            dependents,
+            prio,
+        })
+    }
+
+    /// The recipe's own time, its followers included.
+    fn own(&self, p: &str, clock: &Clock) -> f64 {
+        clock.secs(p)
+            + self
+                .followers
+                .get(p)
+                .into_iter()
+                .flatten()
+                .map(|f| clock.secs(f))
+                .sum::<f64>()
+    }
+
+    /// Jobs of scheduled recipes, with their followers.
+    fn expand(&self, jobs: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        jobs.into_iter()
+            .map(|job| {
+                job.into_iter()
+                    .flat_map(|p| {
+                        std::iter::once(p.clone()).chain(self.followers.get(&p).cloned().unwrap_or_default())
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 /// The jobs: each a list of recipes, built in order.
 ///
 /// Earliest-finish-time clustering: recipes are taken in order of how much work
@@ -166,67 +273,8 @@ fn batch(
     max_batch: usize,
     slack: f64,
 ) -> Result<Vec<Vec<String>>> {
-    levels(recipes)?; // no cycles
-    // a trivial recipe (e.g. a legacy-name alias) with a single non-trivial
-    // dependency is built right after it, in its job
-    let mut followers: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut leader: HashMap<&String, &String> = HashMap::new();
-    for (n, r) in recipes {
-        let real: Vec<&String> = r.deps.iter().filter(|d| !recipes[*d].trivial).collect();
-        if r.trivial && real.len() == 1 {
-            followers.entry(real[0].clone()).or_default().push(n.clone());
-            leader.insert(n, real[0]);
-        }
-    }
-    let lead = |n: &'_ String| -> String { leader.get(n).map(|l| (*l).clone()).unwrap_or_else(|| n.clone()) };
-    let sched: Vec<&String> = recipes.keys().filter(|n| !leader.contains_key(n)).collect();
-    let deps: HashMap<&String, BTreeSet<String>> = sched
-        .iter()
-        .map(|n| {
-            let mut d: BTreeSet<String> = recipes[*n].deps.iter().map(&lead).collect();
-            d.extend(
-                followers
-                    .get(*n)
-                    .into_iter()
-                    .flatten()
-                    .flat_map(|f| recipes[f].deps.iter().map(&lead)),
-            );
-            d.remove(*n);
-            (*n, d)
-        })
-        .collect();
-    let mut dependents: HashMap<&str, Vec<&String>> = HashMap::new();
-    for (n, ds) in &deps {
-        for d in ds {
-            dependents.entry(d.as_str()).or_default().push(n);
-        }
-    }
-    // longest chain of work from a recipe to the end
-    fn rest<'a>(
-        n: &'a str,
-        dependents: &HashMap<&str, Vec<&'a String>>,
-        clock: &Clock,
-        memo: &mut HashMap<&'a str, f64>,
-    ) -> f64 {
-        if let Some(v) = memo.get(n) {
-            return *v;
-        }
-        let tail = dependents
-            .get(n)
-            .into_iter()
-            .flatten()
-            .map(|m| rest(m.as_str(), dependents, clock, memo))
-            .fold(0.0, f64::max);
-        let v = clock.secs(n) + tail;
-        memo.insert(n, v);
-        v
-    }
-    let mut memo = HashMap::new();
-    let prio: HashMap<&String, f64> = sched
-        .iter()
-        .map(|n| (*n, rest(n.as_str(), &dependents, clock, &mut memo)))
-        .collect();
-
+    let g = Graph::new(recipes, clock)?;
+    let (deps, dependents, prio) = (&g.deps, &g.dependents, &g.prio);
     struct Job {
         recipes: Vec<String>,
         start: f64,
@@ -235,7 +283,7 @@ fn batch(
     let mut jobs: Vec<Job> = vec![];
     let mut placed: HashMap<String, (usize, f64)> = HashMap::new();
     let mut waiting: HashMap<&String, usize> = deps.iter().map(|(n, d)| (*n, d.len())).collect();
-    let mut ready: Vec<&String> = sched.iter().copied().filter(|n| deps[*n].is_empty()).collect();
+    let mut ready: Vec<&String> = g.sched.iter().copied().filter(|n| deps[*n].is_empty()).collect();
     while !ready.is_empty() {
         // the ready recipe with the most work after it
         let i = (0..ready.len())
@@ -246,13 +294,7 @@ fn batch(
             })
             .unwrap();
         let p = ready.swap_remove(i);
-        let own = clock.secs(p)
-            + followers
-                .get(p)
-                .into_iter()
-                .flatten()
-                .map(|f| clock.secs(f))
-                .sum::<f64>();
+        let own = g.own(p, clock);
         let dep_jobs: Vec<(usize, f64)> = deps[p].iter().map(|d| placed[d]).collect();
         let at = dep_jobs.iter().map(|(_, f)| *f).fold(0.0, f64::max);
         let fresh = at + clock.overhead + own;
@@ -279,7 +321,7 @@ fn batch(
         jobs[j].recipes.push(p.clone());
         jobs[j].end = end;
         placed.insert(p.clone(), (j, end));
-        for m in dependents.get(p.as_str()).into_iter().flatten() {
+        for m in dependents.get(p).into_iter().flatten() {
             let w = waiting.get_mut(m).unwrap();
             *w -= 1;
             if *w == 0 {
@@ -287,17 +329,108 @@ fn batch(
             }
         }
     }
-    Ok(jobs
-        .into_iter()
-        .map(|job| {
-            job.recipes
-                .into_iter()
-                .flat_map(|p| {
-                    std::iter::once(p.clone()).chain(followers.get(&p).cloned().unwrap_or_default())
+    Ok(g.expand(jobs.into_iter().map(|j| j.recipes).collect()))
+}
+
+/// Jobs for a CI that runs stage after stage (each waits for the whole previous
+/// one), with each job's stage. A stage takes as long as its longest job, so each
+/// stage gets one length: the longest ready recipe, or the stage's work spread
+/// over the runners if that is longer. The ready recipes are packed into jobs of
+/// at most that length (longest first), and a recipe whose dependencies are all
+/// built, or in one job of the stage, follows them into that job while it fits.
+fn batch_staged(
+    recipes: &BTreeMap<String, Recipe>,
+    clock: &Clock,
+    max_batch: usize,
+) -> Result<(Vec<Vec<String>>, Vec<usize>)> {
+    let g = Graph::new(recipes, clock)?;
+    let mut built: BTreeSet<String> = BTreeSet::new();
+    let mut left: BTreeSet<&String> = g.sched.iter().copied().collect();
+    let (mut jobs, mut stages): (Vec<Vec<String>>, Vec<usize>) = (vec![], vec![]);
+    let mut stage = 0;
+    while !left.is_empty() {
+        let mut ready: Vec<&String> = left
+            .iter()
+            .copied()
+            .filter(|n| g.deps[*n].is_subset(&built))
+            .collect();
+        ready.sort_by(|a, b| g.prio[*b].total_cmp(&g.prio[*a]).then(a.cmp(b)));
+        let work: f64 = ready.iter().map(|p| g.own(p, clock)).sum();
+        let longest = ready.iter().map(|p| g.own(p, clock)).fold(0.0, f64::max);
+        let length = clock.overhead + longest.max(work / clock.runners as f64);
+        // (recipes, load)
+        let mut stage_jobs: Vec<(Vec<String>, f64)> = vec![];
+        let mut in_job: HashMap<String, usize> = HashMap::new();
+        let place = |p: &String,
+                     job: Option<usize>,
+                     stage_jobs: &mut Vec<(Vec<String>, f64)>,
+                     in_job: &mut HashMap<String, usize>| {
+            let t = g.own(p, clock);
+            let j = job
+                .or_else(|| {
+                    (0..stage_jobs.len())
+                        .filter(|&j| {
+                            stage_jobs[j].0.len() < max_batch && stage_jobs[j].1 + t <= length + 1e-6
+                        })
+                        .min_by(|&a, &b| stage_jobs[a].1.total_cmp(&stage_jobs[b].1))
                 })
-                .collect()
-        })
-        .collect())
+                .unwrap_or_else(|| {
+                    stage_jobs.push((vec![], clock.overhead));
+                    stage_jobs.len() - 1
+                });
+            stage_jobs[j].0.push(p.clone());
+            stage_jobs[j].1 += t;
+            in_job.insert(p.clone(), j);
+        };
+        for p in &ready {
+            place(p, None, &mut stage_jobs, &mut in_job);
+        }
+        // follow the dependencies into their job
+        loop {
+            let mut moved = false;
+            let mut candidates: Vec<&String> = left
+                .iter()
+                .copied()
+                .filter(|n| !in_job.contains_key(*n) && !g.deps[*n].is_subset(&built))
+                .collect();
+            candidates.sort_by(|a, b| g.prio[*b].total_cmp(&g.prio[*a]).then(a.cmp(b)));
+            for c in candidates {
+                let mut host: Option<usize> = None;
+                let fits = g.deps[c].iter().all(|d| {
+                    if built.contains(d) {
+                        return true;
+                    }
+                    match in_job.get(d) {
+                        Some(&j) if host.is_none_or(|h| h == j) => {
+                            host = Some(j);
+                            true
+                        }
+                        _ => false,
+                    }
+                });
+                if let (true, Some(j)) = (fits, host)
+                    && stage_jobs[j].0.len() < max_batch
+                    && stage_jobs[j].1 + g.own(c, clock) <= length + 1e-6
+                {
+                    place(c, Some(j), &mut stage_jobs, &mut in_job);
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        for (job, _) in stage_jobs {
+            for p in &job {
+                built.insert(p.clone());
+                left.remove(p);
+            }
+            jobs.push(job);
+            stages.push(stage);
+        }
+        stage += 1;
+    }
+    Ok((g.expand(jobs), stages))
 }
 
 fn substitute(v: &mut Value, from: &str, to: &str) {
@@ -419,9 +552,9 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
     };
     // the schedule that finishes first on the runners (and fits GitHub's size
     // limit): more slack, fewer and fuller jobs
-    // (simulated duration, slack, jobs, workflow)
-    type Schedule = (f64, f64, Vec<Vec<String>>, Option<String>);
-    let mut best: Option<Schedule> = None;
+    // (simulated duration, how it was planned, jobs, their stages, workflow)
+    type Schedule = (f64, String, Vec<Vec<String>>, Vec<usize>, Option<String>);
+    let mut candidates: Vec<(String, Vec<Vec<String>>, Vec<usize>)> = vec![];
     for slack in [
         0.0,
         30.0,
@@ -436,25 +569,34 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
         f64::INFINITY,
     ] {
         let jobs = batch(&recipes, &clock, opts.max_batch, slack)?;
+        let stages = job_stages(&job_needs(&jobs, &recipes));
+        candidates.push((format!("clustered, slack {slack} s"), jobs, stages));
+    }
+    if opts.stage_barriers {
+        let (jobs, stages) = batch_staged(&recipes, &clock, opts.max_batch)?;
+        candidates.push(("stage by stage".into(), jobs, stages));
+    }
+    let mut best: Option<Schedule> = None;
+    for (how, jobs, stages) in candidates {
         let yaml = template
             .as_ref()
             .map(|t| render(t, &jobs, &recipes))
             .transpose()?;
-        let span = simulate(&jobs, &recipes, &clock, opts.stage_barriers);
+        let span = simulate(&jobs, &stages, &recipes, &clock, opts.stage_barriers);
         let size = yaml.as_ref().map_or(0, String::len);
         if std::env::var_os("VINCA_RS_DEBUG").is_some() {
             eprintln!(
-                "slack {slack}: {} jobs, {:.0} min, {} KiB",
+                "{how}: {} jobs, {:.0} min, {} KiB",
                 jobs.len(),
                 span / 60.0,
                 size / 1024
             );
         }
         if size <= MAX_WORKFLOW_BYTES && best.as_ref().is_none_or(|b| span < b.0) {
-            best = Some((span, slack, jobs, yaml));
+            best = Some((span, how, jobs, stages, yaml));
         }
     }
-    let Some((span, slack, jobs, yaml)) = best else {
+    let Some((span, how, jobs, stages, yaml)) = best else {
         bail!(
             "no schedule fits GitHub's {} KiB workflow limit: raise --max-batch",
             MAX_WORKFLOW_BYTES / 1024
@@ -464,11 +606,14 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
         std::fs::write(out, yaml).with_context(|| out.display().to_string())?;
     }
     if let Some(out) = outputs.json {
-        std::fs::write(out, serde_json::to_string_pretty(&stages_json(&jobs, &recipes))?)
-            .with_context(|| out.display().to_string())?;
+        std::fs::write(
+            out,
+            serde_json::to_string_pretty(&stages_json(&jobs, &stages, &recipes))?,
+        )
+        .with_context(|| out.display().to_string())?;
     }
     eprintln!(
-        "{} recipes in {} jobs (slack {slack} s): {:.0} min on {} runners (estimate){}",
+        "{} recipes in {} jobs ({how}): {:.0} min on {} runners (estimate){}",
         recipes.len(),
         jobs.len(),
         span / 60.0,
@@ -514,9 +659,12 @@ fn job_stages(needs: &[BTreeSet<usize>]) -> Vec<usize> {
     (0..needs.len()).map(|i| stage_of(i, needs, &mut memo)).collect()
 }
 
-fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serde_json::Value {
+fn stages_json(
+    jobs: &[Vec<String>],
+    stage: &[usize],
+    recipes: &BTreeMap<String, Recipe>,
+) -> serde_json::Value {
     let needs = job_needs(jobs, recipes);
-    let stage = job_stages(&needs);
     // ids as RoboStack/vinca#201 writes them: stage_<stage>_job_<index in the stage>
     let mut id = vec![String::new(); jobs.len()];
     let mut count = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
@@ -538,11 +686,16 @@ fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serd
 
 /// When the last job ends: a job starts once its needs are done and a runner is
 /// free (earliest-created first), and takes the overhead plus its recipes' times.
-fn simulate(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>, clock: &Clock, barriers: bool) -> f64 {
+fn simulate(
+    jobs: &[Vec<String>],
+    stage: &[usize],
+    recipes: &BTreeMap<String, Recipe>,
+    clock: &Clock,
+    barriers: bool,
+) -> f64 {
     let needs = job_needs(jobs, recipes);
-    let stage = job_stages(&needs);
     let mut open_in_stage = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
-    for &s in &stage {
+    for &s in stage {
         open_in_stage[s] += 1;
     }
     let mut done = vec![false; jobs.len()];
@@ -667,7 +820,7 @@ mod tests {
             ("b".to_string(), r(&["a"], false)),
         ]);
         let jobs = vec![vec!["a".to_string()], vec!["b".to_string()]];
-        let j = stages_json(&jobs, &recipes);
+        let j = stages_json(&jobs, &[0, 1], &recipes);
         assert_eq!(j["stages"][0][0]["id"], "stage_0_job_0");
         assert_eq!(j["stages"][1][0]["id"], "stage_1_job_0");
         assert_eq!(j["stages"][1][0]["needs"], serde_json::json!(["stage_0_job_0"]));
