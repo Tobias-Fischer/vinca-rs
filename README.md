@@ -46,7 +46,10 @@ release is published there), `pixi build`, or a source dependency of another pix
 `vinca.yaml` can `extend` another one: package lists are combined, `mutex_package`
 is merged, other keys are replaced. Next to each layer: `patch/` (patches and
 `dependencies.yaml`), `tests/`, `pkg_additional_info.yaml`, and the `conda_index`
-files (`robostack.yaml`). Selectors (`if`/`then`/`else`) are resolved for the target
+files (`robostack.yaml`). Patches are `<pkg>.patch` or `<pkg>.<platform>.patch`
+(`osx`, `linux`, `win`, `emscripten`, `unix`); `<pkg>` there and in the other files
+is a ROS or conda name. Entries for packages that aren't in the distribution are
+warned about. Selectors (`if`/`then`/`else`) are resolved for the target
 platform. Unknown keys are errors.
 
 | key | |
@@ -68,8 +71,10 @@ An additional recipe that replaces a release of the snapshot needs
 ## The workflow
 
 vinca-rs decides what each job builds and which jobs it waits for. How a job builds
-belongs to the caller: the template's `jobs.build` is copied once per job, with
-`@recipes@` replaced by the job's recipes (`@name@` for any `--var name=value`).
+belongs to the caller: the template's `jobs.build` is copied once per job, in its
+place, with `@recipes@` replaced by the job's recipes (`@name@` for any
+`--var name=value`, in string values); its own `needs` and the template's other
+jobs are kept.
 Keep the job small (e.g. a composite action) so that many jobs fit GitHub's 500 KiB
 workflow limit.
 
@@ -129,12 +134,41 @@ takes ~6 s for humble's 2531 recipes (anaconda.org), warm ~3.5 s: 2 s of generat
 ~1.5 s of rendering every recipe with rattler-build's crates (in parallel) for its build
 strings.
 
-## Development
+## For contributors
 
 ```bash
-pixi run test
-pixi run lint
+pixi run test         # cargo test
+pixi run lint         # cargo fmt, cargo clippy --all-targets -- -D warnings
 pixi run typos
 pixi run toml-format
 pixi run toml-lint
 ```
+
+Data flow of `generate`, one module each:
+
+| module | |
+|---|---|
+| `config` | the `vinca.yaml` layers (`extends`), selectors resolved for the platform, and per layer the patches, tests, `dependencies.yaml`, `pkg_additional_info.yaml` and `conda_index` files, keyed by `package_key` (the ROS name) |
+| `distro` | the snapshot (versions, sources, dependency graph) and the package.xml files: rosdistro's release cache, else the pinned tag on GitHub; REP 149 conditions in a fixed environment |
+| `generate` | selection, rosdep → conda names, the requirement rules, aliases, wrappers and the mutex |
+| `recipe` | the typed recipe and its directory (recipe.yaml, scripts, patches, test files) |
+| `skip_existing` | drops the recipes whose builds are on the `skip_existing` channels |
+| `workflow` | jobs, their needs and the GitHub Actions workflow, from a directory of recipes (no network) |
+
+Besides: `snapshot` (writes `rosdistro_snapshot.yaml`), `solve` (the `solve`
+subcommand: host environments against channels' repodata), `license`, `selectors`.
+
+Network: `generate` and `requirements` fetch rosdistro's index and release cache
+(and package.xml files the cache doesn't match), `skip_existing` and `solve` the
+channels' repodata, `snapshot` rosdistro. `workflow` and the tests need none.
+
+The golden test (`src/golden.rs`) generates the offline distribution in
+`tests/fixture` for linux-64 and win-64 and compares with
+`tests/fixture/expected`; after an intended change, rewrite it with
+`VINCA_RS_UPDATE_GOLDEN=1 cargo test golden` and review the diff.
+
+To check that a change leaves real recipes alone, generate a distribution
+(e.g. RoboStack's `distros/<distro>/work`) with the old and the new binary and
+`diff -r` the two directories; `python tools/compare.py <old> <new> <platform>`
+compares by meaning (selectors evaluated, requirement lists as sets), e.g. against
+Python vinca's recipes.

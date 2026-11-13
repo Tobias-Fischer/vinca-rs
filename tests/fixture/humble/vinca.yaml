@@ -1,0 +1,4 @@
+extends: ../shared/vinca.yaml
+ros_distro: humble
+rosdistro_snapshot: rosdistro_snapshot.yaml
+patch_dir: patch

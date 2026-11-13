@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json
+
+package:
+  name: ros-humble-demo-cpp
+  version: 1.2.3
+build:
+  number: 3
+  script: ''
+requirements:
+  run:
+  - ros2-demo-cpp ==1.2.3
+  - ros2-distro-mutex 0.7.* humble_*
+about:
+  summary: Compatibility package for ros2-demo-cpp
+extra:
+  recipe-maintainers:
+  - ros-forge

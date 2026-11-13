@@ -36,16 +36,17 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub type Build = (String, String, String);
 
 /// ROS 2 packages share their names across distributions (ros2-*): only builds
-/// for this distribution (its mutex, or the mutex's build string) count.
-fn built_for_distro(r: &PackageRecord, distro: &str) -> bool {
-    if r.name.as_normalized().ends_with("distro-mutex") {
+/// for this distribution (its mutex, or the mutex's build string) count. Without
+/// a mutex package, every build does.
+fn built_for_distro(r: &PackageRecord, distro: &str, mutex: Option<&str>) -> bool {
+    let Some(mutex) = mutex else {
+        return true;
+    };
+    if r.name.as_normalized() == mutex {
         return r.build.to_string().starts_with(&format!("{distro}_"));
     }
-    let mutexes: Vec<&String> = r
-        .depends
-        .iter()
-        .filter(|d| d.split(' ').next().unwrap_or_default().ends_with("distro-mutex"))
-        .collect();
+    let mutexes: Vec<&String> =
+        r.depends.iter().filter(|d| d.split(' ').next().unwrap_or_default() == mutex).collect();
     mutexes.is_empty()
         || mutexes.iter().any(|d| d.contains(&format!(" {distro}_")) || d.ends_with(&format!(" {distro}")))
 }
@@ -59,6 +60,7 @@ pub fn published(
     channels: &[String],
     subdir: Subdir,
     distro: &str,
+    mutex: Option<&str>,
     names: &[String],
 ) -> Result<HashSet<Build>> {
     use rattler_conda_types::{Channel, PackageName};
@@ -81,7 +83,7 @@ pub fn published(
         .iter()
         .flat_map(|repodata| repodata.iter())
         .map(|r| &r.package_record)
-        .filter(|p| built_for_distro(p, distro))
+        .filter(|p| built_for_distro(p, distro, mutex))
         .map(|p| (p.name.as_normalized().to_string(), p.version.to_string(), p.build.to_string()))
         .collect())
 }

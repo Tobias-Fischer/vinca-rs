@@ -5,7 +5,7 @@
 //! deprecated ones (`packages_skip_by_deps`, `build_all`, `variants_mode`,
 //! string-form `mutex_package`, remote `conda_index`, ...) are errors, as are typos.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -16,6 +16,9 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 use thiserror::Error;
+
+use pixi_build_ros::config::PackageMappingSource;
+use pixi_build_ros::package_map::{PackageMapEntry, PackageMapError, load_package_map_data};
 
 use crate::selectors::evaluate_for_platform;
 
@@ -35,11 +38,23 @@ pub enum Error {
         "rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:\n{0}"
     )]
     UnexplainedOverrides(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageMap(#[from] PackageMapError),
+    #[error("patch {} is not named <package>.patch or <package>.<platform>.patch", .0.display())]
+    #[diagnostic(help("the platform is one of osx, linux, win, emscripten or unix (linux and osx)"))]
+    PatchName(PathBuf),
+    #[error("in {}", path.display())]
+    Selector {
+        path: PathBuf,
+        #[source]
+        #[diagnostic_source]
+        source: crate::selectors::Error,
+    },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-const PATCH_PLATFORMS: [&str; 4] = ["osx", "linux", "win", "emscripten"];
 const PATH_KEYS: [&str; 3] = ["patch_dir", "rosdistro_snapshot", "rosdistro_additional_recipes"];
 const LAYERED_LISTS: [&str; 3] = ["packages_select_by_deps", "packages_exclude", "packages_skip"];
 
@@ -119,24 +134,54 @@ pub struct SnapshotEntry {
     pub override_reason: Option<String>,
 }
 
-/// `robostack:` of a conda_index entry: for every platform, or per platform
-/// (`linux`, `osx`, `win64`, `emscripten` or a conda subdir). Other keys (rosdep
-/// systems) are ignored.
-#[derive(Debug, Deserialize, Clone)]
-pub struct CondaIndexEntry {
-    pub robostack: Option<PlatformList>,
+/// The rosdep mappings (conda_index files), by key; pixi-build-ros resolves them.
+pub type PackageMap = HashMap<String, PackageMapEntry>;
+
+/// Which target platforms a patch applies to (`<package>[.<platform>].patch`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PatchTarget {
+    Any,
+    Linux,
+    Osx,
+    Win,
+    Emscripten,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum PlatformList {
-    All(Vec<String>),
-    PerPlatform(BTreeMap<String, Option<Vec<String>>>),
+impl PatchTarget {
+    /// The file name's platform: `unix` is linux and osx.
+    fn parse(s: &str) -> Option<&'static [Self]> {
+        Some(match s {
+            "linux" => &[Self::Linux],
+            "osx" => &[Self::Osx],
+            "win" => &[Self::Win],
+            "emscripten" => &[Self::Emscripten],
+            "unix" => &[Self::Linux, Self::Osx],
+            _ => return None,
+        })
+    }
+
+    fn of(platform: Subdir) -> Option<Self> {
+        match platform.only_platform()? {
+            "linux" => Some(Self::Linux),
+            "osx" => Some(Self::Osx),
+            "win" => Some(Self::Win),
+            "emscripten" => Some(Self::Emscripten),
+            _ => None,
+        }
+    }
 }
 
-pub type CondaIndex = HashMap<String, CondaIndexEntry>;
+/// Per package (`package_key`), the patches of each target.
+pub type Patches = HashMap<String, HashMap<PatchTarget, Vec<PathBuf>>>;
 
-pub type Patches = HashMap<String, HashMap<String, Vec<PathBuf>>>;
+/// The one name per-package files (patches, tests, dependencies.yaml,
+/// pkg_additional_info.yaml) are keyed and looked up by: the ROS package name,
+/// with underscores. A conda name (`ros-<distro>-<pkg>`, `ros2-<pkg>`,
+/// `ros-<pkg>`) loses its prefix.
+pub fn package_key(name: &str, distro: &str) -> String {
+    let legacy = format!("ros-{distro}-");
+    name.strip_prefix(&legacy).or_else(|| name.strip_prefix("ros2-")).unwrap_or(name).replace('-', "_")
+}
 
 /// The merged `vinca.yaml` layers, and what is read next to them.
 #[derive(Debug, Deserialize)]
@@ -179,19 +224,23 @@ pub struct Config {
     // not keys of vinca.yaml: filled in by `read`
     #[serde(skip, default = "noarch")]
     pub platform: Subdir,
+    // per package, by `package_key`
     #[serde(skip)]
-    pub patches: Patches,
+    patches: Patches,
     #[serde(skip)]
-    pub tests: HashMap<String, PathBuf>,
+    tests: HashMap<String, PathBuf>,
     #[serde(skip)]
-    pub test_folders: HashMap<String, PathBuf>,
+    test_folders: HashMap<String, PathBuf>,
     #[serde(skip)]
-    pub depmods: HashMap<String, DepMods>,
+    depmods: HashMap<String, DepMods>,
     #[serde(skip)]
-    pub additional_info: HashMap<String, PkgAdditionalInfo>,
-    /// conda_index files, the extending configuration's first
+    additional_info: HashMap<String, PkgAdditionalInfo>,
+    /// the per-package entries of the distribution's own layers (not of the base one)
     #[serde(skip)]
-    pub conda_indexes: Vec<CondaIndex>,
+    own_entries: BTreeSet<(&'static str, String)>,
+    /// the conda_index files' mappings, the extending configuration's over the others
+    #[serde(skip)]
+    pub package_map: PackageMap,
     /// rosdistro snapshot + additional recipes (which win)
     #[serde(skip)]
     pub snapshot: IndexMap<String, SnapshotEntry>,
@@ -237,7 +286,7 @@ fn load_layers(path: &Path, platform: Subdir, seen: &mut Vec<PathBuf>) -> Result
     }
     seen.push(path.clone());
     let dir = path.parent().unwrap().to_path_buf();
-    let mut conf = match evaluate_for_platform(&load_yaml(&path)?, platform.as_str()) {
+    let mut conf = match selected(&path, platform)? {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     };
@@ -303,23 +352,7 @@ fn merge_per_package(base: &mut Mapping, own: &Mapping) {
     }
 }
 
-/// `entries` also under ros-<distro>-<pkg>, ros-<pkg> and ros2-<pkg> (setdefault).
-fn add_name_variants<T: Clone>(entries: &mut HashMap<String, T>, distro: &str) {
-    let legacy = format!("ros-{distro}-");
-    for (name, value) in entries.clone() {
-        let short = name
-            .strip_prefix(&legacy)
-            .or_else(|| name.strip_prefix("ros2-"))
-            .or_else(|| name.strip_prefix("ros-"))
-            .unwrap_or(&name)
-            .to_string();
-        for v in [format!("{legacy}{short}"), format!("ros-{short}"), format!("ros2-{short}")] {
-            entries.entry(v).or_insert_with(|| value.clone());
-        }
-    }
-}
-
-/// `<package>[.<platform>].patch`, grouped by package and target OS.
+/// `<package>[.<platform>].patch`, grouped by package and target platform.
 fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
     let mut patches: Patches = HashMap::new();
     let mut files: Vec<_> = fs::read_dir(dir)?
@@ -330,19 +363,16 @@ fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
     for path in files {
         let fname = path.file_name().unwrap().to_string_lossy().to_string();
         let parts: Vec<&str> = fname.split('.').collect();
-        let entry = patches.entry(parts[0].to_string()).or_default();
-        let dest: Vec<&str> = if parts.len() == 3 && PATCH_PLATFORMS.contains(&parts[1]) {
-            vec![parts[1]]
-        } else if parts.len() == 3 && parts[1] == "unix" {
-            vec!["linux", "osx"]
-        } else {
-            vec!["any"]
+        let targets = match parts[..] {
+            [_, _] => &[PatchTarget::Any][..],
+            [_, platform, _] => PatchTarget::parse(platform).ok_or_else(|| Error::PatchName(path.clone()))?,
+            _ => return Err(Error::PatchName(path)),
         };
-        for p in dest {
-            entry.entry(p.to_string()).or_default().push(path.clone());
+        let entry = patches.entry(package_key(parts[0], distro)).or_default();
+        for t in targets {
+            entry.entry(*t).or_default().push(path.clone());
         }
     }
-    add_name_variants(&mut patches, distro);
     Ok(patches)
 }
 
@@ -353,19 +383,32 @@ fn discover_tests(dir: &Path, distro: &str) -> (HashMap<String, PathBuf>, HashMa
         for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
             if p.is_dir() {
-                folders.insert(name, p);
+                folders.insert(package_key(&name, distro), p);
             } else if name.ends_with(".yaml") {
-                tests.insert(name.split('.').next().unwrap().to_string(), p);
+                tests.insert(package_key(name.split('.').next().unwrap(), distro), p);
             }
         }
     }
-    add_name_variants(&mut tests, distro);
-    add_name_variants(&mut folders, distro);
     (tests, folders)
 }
 
+/// A per-package file's entries, by `package_key` (merged as `merge_per_package`).
+fn by_package_key(m: Mapping, distro: &str) -> Mapping {
+    let mut out = Mapping::new();
+    for (k, v) in m {
+        let key = k.as_str().map_or(k.clone(), |n| Value::String(package_key(n, distro)));
+        merge_per_package(&mut out, &Mapping::from_iter([(key, v)]));
+    }
+    out
+}
+
+fn selected(path: &Path, platform: Subdir) -> Result<Value> {
+    evaluate_for_platform(&load_yaml(path)?, platform.as_str())
+        .map_err(|source| Error::Selector { path: path.to_path_buf(), source })
+}
+
 fn selected_mapping(path: &Path, platform: Subdir) -> Result<Mapping> {
-    Ok(match evaluate_for_platform(&load_yaml(path)?, platform.as_str()) {
+    Ok(match selected(path, platform)? {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     })
@@ -385,33 +428,56 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
 
     let mut depmods = Mapping::new();
     let mut additional_info = Mapping::new();
-    for (dir, layer) in &layers {
+    let mut conda_indexes = vec![];
+    for (i, (dir, layer)) in layers.iter().enumerate() {
+        // the distribution's own entries, checked against its packages: those of every
+        // layer but the one the others extend (shared by every distribution)
+        let mut own_entries = vec![];
+        let mut note = |what: &'static str, keys: Vec<String>| {
+            if i > 0 || layers.len() == 1 {
+                own_entries.extend(keys.into_iter().map(|k| (what, k)));
+            }
+        };
+        let roots = names(layer.get("packages_select_by_deps"));
+        note("packages_select_by_deps", roots.iter().map(|n| n.replace('-', "_")).collect());
         if let Some(Value::String(pd)) = layer.get("patch_dir") {
             let pd = PathBuf::from(pd);
-            conf.patches.extend(discover_patches(&pd, &conf.ros_distro)?);
+            let patches = discover_patches(&pd, &conf.ros_distro)?;
+            note("patches", patches.keys().cloned().collect());
+            conf.patches.extend(patches);
             let deps = pd.join("dependencies.yaml");
             if deps.exists() {
-                merge_per_package(&mut depmods, &selected_mapping(&deps, platform)?);
+                let own = by_package_key(selected_mapping(&deps, platform)?, &conf.ros_distro);
+                note("dependencies.yaml", own.keys().filter_map(|k| k.as_str().map(String::from)).collect());
+                merge_per_package(&mut depmods, &own);
             }
         }
         let (t, f) = discover_tests(dir, &conf.ros_distro);
+        note("tests", t.keys().chain(f.keys()).cloned().collect());
         conf.tests.extend(t);
         conf.test_folders.extend(f);
         let info = dir.join("pkg_additional_info.yaml");
         if info.exists() {
-            merge_per_package(&mut additional_info, &selected_mapping(&info, platform)?);
+            let own = by_package_key(selected_mapping(&info, platform)?, &conf.ros_distro);
+            note(
+                "pkg_additional_info.yaml",
+                own.keys().filter_map(|k| k.as_str().map(String::from)).collect(),
+            );
+            merge_per_package(&mut additional_info, &own);
         }
+        conf.own_entries.extend(own_entries);
         let mut layer_indexes = vec![];
         for i in names(layer.get("conda_index")) {
             let p = dir.join(&i);
             if !p.is_file() {
                 return Err(Error::CondaIndexNotAFile { name: i, dir: dir.clone() });
             }
-            layer_indexes.push(typed::<CondaIndex>(load_yaml(&p)?, &p)?);
+            layer_indexes.push(PackageMappingSource::File { path: p });
         }
-        layer_indexes.append(&mut conf.conda_indexes);
-        conf.conda_indexes = layer_indexes;
+        layer_indexes.append(&mut conda_indexes);
+        conda_indexes = layer_indexes;
     }
+    conf.package_map = load_package_map_data(&conda_indexes)?;
     conf.depmods = typed(Value::Mapping(depmods), Path::new("patch/dependencies.yaml"))?;
     conf.additional_info = typed(Value::Mapping(additional_info), Path::new("pkg_additional_info.yaml"))?;
 
@@ -468,25 +534,13 @@ fn version_lt(a: &str, b: &str) -> bool {
 }
 
 impl Config {
-    /// ROS name without distro prefix, with underscores.
-    pub fn short_name(&self, name: &str) -> String {
-        let n = name.replace('-', "_");
-        for p in ["ros2_".to_string(), format!("ros_{}_", self.ros_distro), "ros_".to_string()] {
-            if let Some(s) = n.strip_prefix(&p) {
-                return s.to_string();
-            }
-        }
-        n
+    fn key(&self, name: &str) -> String {
+        package_key(name, &self.ros_distro)
     }
 
     /// The pkg_additional_info entry, by ROS name or conda name.
     pub fn info(&self, name: &str) -> PkgAdditionalInfo {
-        let n = name.replace('-', "_");
-        self.additional_info
-            .get(&n)
-            .or_else(|| self.additional_info.get(&self.short_name(name)))
-            .cloned()
-            .unwrap_or_default()
+        self.additional_info.get(&self.key(name)).cloned().unwrap_or_default()
     }
 
     pub fn build_number_for(&self, name: &str) -> u64 {
@@ -497,12 +551,31 @@ impl Config {
         self.info(name).generate_dummy_package_with_run_deps.is_some()
     }
 
-    pub fn package_patches(&self, conda_name: &str) -> Vec<PathBuf> {
-        let Some(p) = self.patches.get(conda_name) else {
+    /// The patches for the target platform: those for any, then its own.
+    pub fn package_patches(&self, name: &str) -> Vec<PathBuf> {
+        let Some(p) = self.patches.get(&self.key(name)) else {
             return vec![];
         };
-        let os = self.platform.only_platform().and_then(|os| p.get(os));
-        p.get("any").into_iter().flatten().chain(os.into_iter().flatten()).cloned().collect()
+        let own = PatchTarget::of(self.platform).and_then(|t| p.get(&t));
+        p.get(&PatchTarget::Any).into_iter().flatten().chain(own.into_iter().flatten()).cloned().collect()
+    }
+
+    /// The test file (`tests/<package>.yaml`) and folder of a package.
+    pub fn package_tests(&self, name: &str) -> (Option<&PathBuf>, Option<&PathBuf>) {
+        let key = self.key(name);
+        (self.tests.get(&key), self.test_folders.get(&key))
+    }
+
+    /// The patch/dependencies.yaml entry of a package.
+    pub fn depmods(&self, name: &str) -> Option<&DepMods> {
+        self.depmods.get(&self.key(name))
+    }
+
+    /// The distribution's own entries (its packages_select_by_deps, patches, tests,
+    /// dependencies.yaml, pkg_additional_info.yaml) for which `known` is false, e.g.
+    /// typos or stale entries: "<where>: <package>".
+    pub fn unmatched(&self, known: impl Fn(&str) -> bool) -> Vec<String> {
+        self.own_entries.iter().filter(|(_, k)| !known(k)).map(|(w, k)| format!("{w}: {k}")).collect()
     }
 }
 
@@ -518,6 +591,35 @@ mod tests {
             dependencies: Some(vec![]),
             override_reason: reason.map(String::from),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn package_keys() {
+        for n in ["ros2-foo-bar", "ros-humble-foo-bar", "foo_bar", "foo-bar"] {
+            assert_eq!(package_key(n, "humble"), "foo_bar", "{n}");
+        }
+        assert_eq!(package_key("ros2-ros-workspace", "humble"), "ros_workspace");
+        assert_eq!(package_key("ros_workspace", "humble"), "ros_workspace");
+        assert_eq!(package_key("ros2_control", "humble"), "ros2_control");
+        // a ROS name written with dashes, not a conda prefix
+        assert_eq!(package_key("ros-gz-bridge", "humble"), "ros_gz_bridge");
+    }
+
+    #[test]
+    fn patch_platforms() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in ["ros2-a.patch", "ros2-a.unix.patch", "ros2-a.win.patch", "ros-humble-b.osx.patch"] {
+            fs::write(tmp.path().join(f), "").unwrap();
+        }
+        let p = discover_patches(tmp.path(), "humble").unwrap();
+        assert_eq!(p["a"].len(), 4);
+        assert_eq!(p["a"][&PatchTarget::Linux], [tmp.path().join("ros2-a.unix.patch")]);
+        assert_eq!(p["b"][&PatchTarget::Osx].len(), 1);
+        for bad in ["ros2-c.win64.patch", "ros2-c.osx-arm64.patch", "ros2-c.win.x.patch"] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(bad), "").unwrap();
+            assert!(matches!(discover_patches(dir.path(), "humble"), Err(Error::PatchName(_))), "{bad}");
         }
     }
 

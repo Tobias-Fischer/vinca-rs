@@ -7,11 +7,12 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
+use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
 use pixi_build_ros::package_xml::{Dependency, PackageXml};
 use serde_yaml::Value;
 use thiserror::Error;
 
-use crate::config::{self, Config, PackageNameMode, PlatformList};
+use crate::config::{self, Config, PackageNameMode};
 use crate::distro::{self, Distro};
 use crate::license::to_spdx;
 use crate::recipe::*;
@@ -19,8 +20,11 @@ use crate::selectors::evaluate_distro;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error("conda_index entry {0} has no robostack mapping")]
-    NoRobostackMapping(String),
+    #[error("no template for {0}")]
+    NoTemplate(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageMap(#[from] PackageMapError),
     #[error(transparent)]
     #[diagnostic(transparent)]
     Distro(#[from] distro::Error),
@@ -107,8 +111,8 @@ pub struct Generator<'a> {
     shadowed: BTreeSet<String>,
 }
 
-fn template(name: &str) -> Option<&'static str> {
-    Some(match name {
+fn template(name: &str) -> Result<&'static str> {
+    Ok(match name {
         "build_ament_cmake.sh" => include_str!("../templates/build_ament_cmake.sh.in"),
         "bld_ament_cmake.bat" => include_str!("../templates/bld_ament_cmake.bat.in"),
         "build_ament_python.sh" => include_str!("../templates/build_ament_python.sh.in"),
@@ -121,7 +125,7 @@ fn template(name: &str) -> Option<&'static str> {
         "deactivate.sh" => include_str!("../templates/deactivate.sh.in"),
         "deactivate.bat" => include_str!("../templates/deactivate.bat.in"),
         "deactivate.ps1" => include_str!("../templates/deactivate.ps1.in"),
-        _ => return None,
+        _ => return Err(Error::NoTemplate(name.into())),
     })
 }
 
@@ -150,8 +154,7 @@ fn names(deps: &[&Vec<Dependency>]) -> Vec<String> {
 
 impl<'a> Generator<'a> {
     pub fn new(conf: &'a Config, distro: &'a Distro) -> Self {
-        let shadowed =
-            conf.conda_indexes.iter().flat_map(|i| i.keys()).filter(|n| distro.has(n)).cloned().collect();
+        let shadowed = conf.package_map.keys().filter(|n| distro.has(n)).cloned().collect();
         Self { conf, distro, unsatisfied: BTreeSet::new(), shadowed }
     }
 
@@ -197,39 +200,29 @@ impl<'a> Generator<'a> {
 
     /// A rosdep key or ROS package -> conda specs.
     fn resolve(&mut self, dep: &str, kind: DepKind) -> Result<Vec<String>> {
-        for index in &self.conf.conda_indexes {
-            let Some(entry) = index.get(dep) else {
-                continue;
-            };
-            let specs = match &entry.robostack {
-                None => return Err(Error::NoRobostackMapping(dep.into())),
-                Some(PlatformList::All(l)) => l.clone(),
-                Some(PlatformList::PerPlatform(m)) => m
-                    .get(self.conf.platform.as_str())
-                    .or_else(|| match self.conf.platform.only_platform() {
-                        Some("win") => m.get("win64"),
-                        Some(os @ ("linux" | "osx" | "emscripten")) => m.get(os),
-                        _ => None,
-                    })
-                    .cloned()
-                    .flatten()
-                    .unwrap_or_default(),
-            };
-            if kind == DepKind::Build {
-                return Ok(specs);
-            }
-            return Ok(specs
+        match lookup(&self.conf.package_map, dep, self.conf.platform)? {
+            Some(MappedPackages::Conda(specs)) if kind == DepKind::Build => Ok(specs),
+            Some(MappedPackages::Conda(specs)) => Ok(specs
                 .into_iter()
                 .map(|s| if s.contains("${{") { s } else { s.split(' ').next().unwrap().to_string() })
                 .filter(|s| s != "python")
-                .collect());
+                .collect()),
+            Some(MappedPackages::Ros(names)) => {
+                Ok(names.iter().filter_map(|n| self.ros_dependency(n)).collect())
+            }
+            None => Ok(self.ros_dependency(dep).into_iter().collect()),
         }
+    }
+
+    /// A ROS package dependency's conda name, unless the distribution doesn't have
+    /// it or excludes it (then it is reported as unsatisfied).
+    fn ros_dependency(&mut self, dep: &str) -> Option<String> {
         let excluded = self.conf.packages_exclude.iter().any(|e| e == dep || *e == dep.replace('_', "-"));
         if !self.distro.has(dep) || excluded {
             self.unsatisfied.insert(dep.to_string());
-            return Ok(vec![]);
+            return None;
         }
-        Ok(vec![self.conda_name(dep)])
+        Some(self.conda_name(dep))
     }
 
     fn resolve_all(&mut self, deps: impl IntoIterator<Item = String>, kind: DepKind) -> Result<Vec<String>> {
@@ -295,16 +288,18 @@ impl<'a> Generator<'a> {
     }
 
     fn tests(&self, conda: &str, files: &mut RecipeFiles) -> Result<Vec<serde_yaml::Value>> {
-        if let Some(dir) = self.conf.test_folders.get(conda) {
+        let (test_file, test_folder) = self.conf.package_tests(conda);
+        if let Some(dir) = test_folder {
             for e in fs::read_dir(dir)? {
                 let e = e?;
                 files.copies.push((PathBuf::from(e.file_name()), e.path()));
             }
         }
-        let Some(path) = self.conf.tests.get(conda) else {
+        let Some(path) = test_file else {
             return Ok(vec![]);
         };
-        let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name);
+        let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name, self.conf.platform.as_str())
+            .map_err(|source| config::Error::Selector { path: path.to_path_buf(), source })?;
         Ok(t.get("tests").and_then(Value::as_sequence).cloned().unwrap_or_default())
     }
 
@@ -464,7 +459,7 @@ impl<'a> Generator<'a> {
         run.extend(self.resolve_all(run_deps, DepKind::Run)?);
 
         // patch/dependencies.yaml
-        if let Some(m) = self.conf.depmods.get(&xml.name).cloned() {
+        if let Some(m) = self.conf.depmods(ros).cloned() {
             for (list, add, remove) in [
                 (&mut build, &m.add_build, &m.remove_build),
                 (&mut host, &m.add_host, &m.remove_host),
@@ -474,7 +469,8 @@ impl<'a> Generator<'a> {
                     list.spec(self.normalize(a));
                 }
                 for r in remove.iter().filter_map(|v| v.as_str()) {
-                    list.remove(&self.normalize(r));
+                    let spec = self.normalize(r);
+                    list.remove(spec.split_whitespace().next().unwrap_or_default());
                 }
             }
         }
@@ -518,7 +514,7 @@ impl<'a> Generator<'a> {
             }))?);
         }
         recipe.tests.extend(self.tests(&conda, &mut files)?);
-        let info = self.conf.info(&self.conf.short_name(&conda));
+        let info = self.conf.info(&conda);
         let prefix = self.prefix();
         let vars = [
             ("ros_package_prefix", prefix.as_str()),
@@ -526,13 +522,13 @@ impl<'a> Generator<'a> {
             ("additional_folder", self.distro.additional_folder(ros)),
             ("ros_distro", self.distro.name.as_str()),
         ];
-        files.scripts.push((script.clone(), render(template(&script).unwrap(), &vars)));
+        files.scripts.push((script.clone(), render(template(&script)?, &vars)));
         // ros_workspace installs the environment's activation scripts
         if ros == "ros_workspace" {
             for s in ["activate", "deactivate"] {
                 for ext in ["sh", "bat", "ps1"] {
                     let n = format!("{s}.{ext}");
-                    files.scripts.push((n.clone(), render(template(&n).unwrap(), &vars)));
+                    files.scripts.push((n.clone(), render(template(&n)?, &vars)));
                 }
             }
         }
@@ -544,8 +540,8 @@ impl<'a> Generator<'a> {
     fn apply_rules(&self, build: &mut Reqs, host: &mut Reqs, run: &mut Reqs) {
         let emscripten = self.emscripten();
         // cmake is a build tool, never a host or (on Emscripten) run dependency
-        if host.remove("cmake") {
-            build.spec("cmake");
+        for spec in host.remove("cmake") {
+            build.spec(spec);
         }
         if emscripten {
             run.remove("cmake");
@@ -556,8 +552,8 @@ impl<'a> Generator<'a> {
         let had = host.remove(&mimick);
         if emscripten {
             build.remove(&mimick);
-        } else if had {
-            build.spec(mimick);
+        } else {
+            build.extend(had);
         }
         // spellchecker:on
         // Emscripten resolves the generators out of `build`
@@ -575,9 +571,9 @@ impl<'a> Generator<'a> {
         }
         // build-machine tools: host when native, build when cross-compiling
         for d in ["pyqt-builder", "git", "doxygen", "git-lfs"] {
-            if host.remove(d) {
-                host.push(Req::native(d));
-                build.push(Req::cross(d));
+            for spec in host.remove(d) {
+                host.push(Req::native(spec.clone()));
+                build.push(Req::cross(spec));
             }
         }
     }

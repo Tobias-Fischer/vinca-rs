@@ -1,0 +1,8 @@
+demo_cpp:
+  add_host: ["zlib"]
+  # by name: also the conditional (native-only) pkg-config
+  remove_host: ["pkg-config"]
+demo_py:
+  add_run:
+    - if: linux
+      then: ["libfoo-linux"]
