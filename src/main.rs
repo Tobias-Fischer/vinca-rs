@@ -173,7 +173,8 @@ enum Command {
     },
     /// Solve recipes' host environments, one JSON request per stdin line
     /// (`{"recipe": path, "glibc": optional}`), with the repodata kept in memory:
-    /// `{"ok", "text"}` per line, as `rattler-build --render-only --with-solve` decides
+    /// `{"ok", "text"}` per line, as `rattler-build --render-only --with-solve` decides,
+    /// with `"error"` when a request couldn't be answered (e.g. invalid, or no repodata)
     Solve {
         #[arg(long)]
         platform: Subdir,

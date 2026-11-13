@@ -1,13 +1,17 @@
-//! `vinca-rs solve --serve`: solve the host environments of recipes, one request per
-//! line, with the repodata loaded once and kept in memory.
+//! `vinca-rs solve --platform <subdir> -c <channel>...`: solve the host environments
+//! of recipes, one JSON request per stdin line, with the repodata loaded once and
+//! kept in memory.
 //!
 //! Each request names a recipe (and optionally a glibc for its virtual packages).
 //! The recipe is rendered with rattler-build's crates against the variant config, a
 //! bare host requirement gets its variant pin (as rattler-build's `apply_variant`), and
 //! the host specs of every variant are solved with rattler's solver: the same answer
 //! as `rattler-build build --render-only --with-solve`, without a process, a render
-//! of the channels' repodata and a solver set-up per question. The response is
-//! `{"ok": bool, "text": "<the solver's explanation when not ok>"}`.
+//! of the channels' repodata and a solver set-up per question. The response, one
+//! line per request, is `{"ok": bool, "text": "<the solver's explanation when not ok>"}`;
+//! when the question couldn't be answered (an invalid request, a recipe that doesn't
+//! render, the repodata not fetched) also `"error": "<message>"` (with `ok` false
+//! and the message as `text` too, for readers that only know `ok`/`text`).
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -58,6 +62,18 @@ struct Request {
 struct Response {
     ok: bool,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl Response {
+    fn solved(explanation: Option<String>) -> Self {
+        Response { ok: explanation.is_none(), text: explanation.unwrap_or_default(), error: None }
+    }
+    fn error(e: &Error) -> Self {
+        let message = crate::chain(e);
+        Response { ok: false, text: message.clone(), error: Some(message) }
+    }
 }
 
 /// `name` alone gets the variant's value, as rattler-build does for host specs.
@@ -161,16 +177,29 @@ pub fn serve(platform: Subdir, channels: &[String], variant_config: PathBuf) -> 
         if line.trim().is_empty() {
             continue;
         }
-        let request: Request =
-            serde_json::from_str(&line).map_err(|source| Error::Request { line: line.clone(), source })?;
-        let response = match server.solve(&request.recipe, request.glibc) {
-            Ok(None) => Response { ok: true, text: String::new() },
-            Ok(Some(explanation)) => Response { ok: false, text: explanation },
-            Err(e) => Response { ok: false, text: crate::chain(&e) },
-        };
+        let response = serde_json::from_str::<Request>(&line)
+            .map_err(|source| Error::Request { line: line.clone(), source })
+            .and_then(|request| server.solve(&request.recipe, request.glibc))
+            .map_or_else(|e| Response::error(&e), Response::solved);
         let mut out = stdout.lock();
         writeln!(out, "{}", serde_json::to_string(&response)?)?;
         out.flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errors_are_marked() {
+        let json = |r: Response| serde_json::to_value(r).unwrap();
+        assert_eq!(json(Response::solved(None)), serde_json::json!({"ok": true, "text": ""}));
+        assert_eq!(json(Response::solved(Some("x".into()))), serde_json::json!({"ok": false, "text": "x"}));
+        let source = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let e = json(Response::error(&Error::Request { line: "{".into(), source }));
+        assert_eq!(e["ok"], false);
+        assert!(e["error"].as_str().unwrap().starts_with("invalid request {"));
+    }
 }
