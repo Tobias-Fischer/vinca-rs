@@ -291,15 +291,24 @@ fn parse<T: for<'de> Deserialize<'de>>(text: &str, what: &str) -> Result<T> {
     serde_yaml::from_str(text).map_err(|source| Error::Parse { what: what.into(), source })
 }
 
-fn text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
+pub fn text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
     get(client, url)?.text().map_err(|source| Error::Fetch { url: url.into(), source })
+}
+
+/// Whether GITHUB_TOKEN goes with a request to `url`: only to GitHub's own hosts,
+/// over https.
+fn is_github(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && matches!(u.host_str(), Some("github.com" | "api.github.com" | "raw.githubusercontent.com"))
+    })
 }
 
 fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blocking::Response> {
     let mut last = None;
     for attempt in 0..5 {
         let mut req = client.get(url);
-        if url.contains("github")
+        if is_github(url)
             && let Ok(token) = std::env::var("GITHUB_TOKEN")
         {
             req = req.header("Authorization", format!("token {token}"));
@@ -496,5 +505,20 @@ impl Distro {
 
     pub fn package(&self, pkg: &str) -> Result<PackageXml> {
         parse_package(&self.package_xml(pkg)?, pkg, &self.condition_env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_only_for_github_hosts() {
+        assert!(is_github("https://raw.githubusercontent.com/ros/rosdistro/master/index-v4.yaml"));
+        assert!(is_github("https://api.github.com/repos/x/y"));
+        assert!(!is_github("https://github.com.evil.example/x"));
+        assert!(!is_github("https://example.com/github/x"));
+        assert!(!is_github("http://github.com/x"));
+        assert!(!is_github("https://repo.ros2.org/rosdistro_cache/humble-cache.yaml.gz"));
     }
 }

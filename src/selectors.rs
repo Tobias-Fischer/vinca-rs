@@ -92,9 +92,12 @@ pub fn process(node: &Value, cond: &dyn Fn(&str) -> Option<Result<bool>>) -> Res
         Value::Sequence(seq) => {
             let mut out = Vec::new();
             for item in seq {
+                // a selector's list is spliced into the list it is in; a list is not
+                let selector =
+                    matches!(item, Value::Mapping(m) if m.contains_key("if") && m.contains_key("then"));
                 match process(item, cond)? {
                     None => {}
-                    Some(Value::Sequence(inner)) => out.extend(inner),
+                    Some(Value::Sequence(inner)) if selector => out.extend(inner),
                     Some(v) => out.push(v),
                 }
             }
@@ -134,6 +137,10 @@ mod tests {
         let osx = evaluate_for_platform(&v, "osx-arm64").unwrap();
         assert_eq!(osx["key"], Value::from("x"));
         assert!(eval("aarch64 and unix", &platform_flags("osx-arm64")).unwrap());
+        // a nested list stays one
+        let nested: Value = serde_yaml::from_str("[[a, b], {if: linux, then: [[c]]}]").unwrap();
+        let out = evaluate_for_platform(&nested, "linux-64").unwrap();
+        assert_eq!(out, serde_yaml::from_str::<Value>("[[a, b], [c]]").unwrap());
     }
 
     #[test]

@@ -19,6 +19,8 @@ use crate::selectors::evaluate_distro;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
+    #[error("no template for {0}")]
+    NoTemplate(String),
     #[error("conda_index entry {0} has no robostack mapping")]
     NoRobostackMapping(String),
     #[error(transparent)]
@@ -107,8 +109,8 @@ pub struct Generator<'a> {
     shadowed: BTreeSet<String>,
 }
 
-fn template(name: &str) -> Option<&'static str> {
-    Some(match name {
+fn template(name: &str) -> Result<&'static str> {
+    Ok(match name {
         "build_ament_cmake.sh" => include_str!("../templates/build_ament_cmake.sh.in"),
         "bld_ament_cmake.bat" => include_str!("../templates/bld_ament_cmake.bat.in"),
         "build_ament_python.sh" => include_str!("../templates/build_ament_python.sh.in"),
@@ -121,7 +123,7 @@ fn template(name: &str) -> Option<&'static str> {
         "deactivate.sh" => include_str!("../templates/deactivate.sh.in"),
         "deactivate.bat" => include_str!("../templates/deactivate.bat.in"),
         "deactivate.ps1" => include_str!("../templates/deactivate.ps1.in"),
-        _ => return None,
+        _ => return Err(Error::NoTemplate(name.into())),
     })
 }
 
@@ -536,13 +538,13 @@ impl<'a> Generator<'a> {
             ("additional_folder", self.distro.additional_folder(ros)),
             ("ros_distro", self.distro.name.as_str()),
         ];
-        files.scripts.push((script.clone(), render(template(&script).unwrap(), &vars)));
+        files.scripts.push((script.clone(), render(template(&script)?, &vars)));
         // ros_workspace installs the environment's activation scripts
         if ros == "ros_workspace" {
             for s in ["activate", "deactivate"] {
                 for ext in ["sh", "bat", "ps1"] {
                     let n = format!("{s}.{ext}");
-                    files.scripts.push((n.clone(), render(template(&n).unwrap(), &vars)));
+                    files.scripts.push((n.clone(), render(template(&n)?, &vars)));
                 }
             }
         }

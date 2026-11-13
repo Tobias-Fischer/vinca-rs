@@ -271,7 +271,9 @@ fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> 
         let names: Vec<String> = fs::read_dir(&out)?
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
             .collect();
-        let published = skip_existing::published(&conf.skip_existing, t.platform, &conf.ros_distro, &names)?;
+        let mutex = conf.mutex_package.as_ref().map(|m| m.name.as_str());
+        let published =
+            skip_existing::published(&conf.skip_existing, t.platform, &conf.ros_distro, mutex, &names)?;
         let variants = variant_config.is_file().then_some(variant_config.as_path());
         let removed = skip_existing::remove_built(&out, t.platform, variants, &published)?;
         eprintln!(
