@@ -18,7 +18,7 @@ flate2 = "1"
 indexmap = { version = "2", features = ["serde"] }
 minijinja = "2"
 # package.xml parsing (REP 149 conditions); the library target is pending upstream
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "b6fd714ad9189c57565f6b3f0b33442e142212c2" }
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "64286c96ee059a26a9ce462ae7d13cd8d875aff0" }
 rattler_build_recipe = "0.1.24"
 rattler_build_variant_config = "0.1.24"
 rattler_conda_types = { version = "0.58", default-features = false }
