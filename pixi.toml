@@ -1,0 +1,32 @@
+[workspace]
+name = "vinca-rs"
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+preview = ["pixi-build"]
+
+# vinca-rs as a conda package: `pixi build`, or as a source dependency of another
+# workspace (e.g. RoboStack's): vinca-rs = { git = "https://github.com/Tobias-Fischer/vinca-rs" }
+[package]
+name = "vinca-rs"
+version = "0.1.0"
+
+[package.build.backend]
+name = "pixi-build-rust"
+channels = ["https://prefix.dev/conda-forge"]
+
+[package.build.config]
+binaries = ["vinca-rs"]
+
+[package.build-dependencies]
+# pixi-build-ros' dependencies need a recent compiler
+rust = ">=1.97"
+
+# development
+[dependencies]
+rust = ">=1.97"
+
+[tasks]
+build = "cargo build --release"
+test = "cargo test"
+fmt = "cargo fmt"
+lint = { cmd = "cargo clippy --all-targets -- -D warnings", depends-on = ["fmt"] }

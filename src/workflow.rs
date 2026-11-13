@@ -368,18 +368,36 @@ fn render(template: &Value, jobs: &[Vec<String>], recipes: &BTreeMap<String, Rec
     Ok(serde_yaml::to_string(&wf)?.replace("'on':", "on:"))
 }
 
-/// Write the workflow for `recipes` to `out`; false when there is nothing to build.
-pub fn generate(recipes_dir: &Path, template: &Path, out: &Path, opts: &Options) -> Result<bool> {
+/// Where the workflow goes: a GitHub Actions workflow from a template, and/or the
+/// jobs as JSON (`{"stages": [[{"id", "name", "recipes", "needs"}]]}`, a job's
+/// stage being one more than its latest need's; RoboStack/vinca#201's format).
+pub struct Outputs<'a> {
+    pub template: Option<&'a Path>,
+    pub workflow: Option<&'a Path>,
+    pub json: Option<&'a Path>,
+}
+
+/// Write the outputs for the recipes; false when there is nothing to build.
+pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result<bool> {
     let recipes = read_recipes(recipes_dir)?;
     if recipes.is_empty() {
         return Ok(false);
     }
-    let mut text = std::fs::read_to_string(template).with_context(|| template.display().to_string())?;
-    text = text.replace("@platform@", &opts.platform);
-    for (k, v) in &opts.vars {
-        text = text.replace(&format!("@{k}@"), v);
-    }
-    let template = evaluate_for_platform(&serde_yaml::from_str(&text)?, &opts.platform);
+    let template = match (outputs.template, outputs.workflow) {
+        (Some(t), Some(_)) => {
+            let mut text = std::fs::read_to_string(t).with_context(|| t.display().to_string())?;
+            text = text.replace("@platform@", &opts.platform);
+            for (k, v) in &opts.vars {
+                text = text.replace(&format!("@{k}@"), v);
+            }
+            Some(evaluate_for_platform(
+                &serde_yaml::from_str(&text)?,
+                &opts.platform,
+            ))
+        }
+        (None, Some(_)) => bail!("a workflow needs --template"),
+        _ => None,
+    };
 
     let mut known: Vec<f64> = opts.timings.recipes.values().copied().collect();
     known.sort_by(f64::total_cmp);
@@ -396,9 +414,11 @@ pub fn generate(recipes_dir: &Path, template: &Path, out: &Path, opts: &Options)
             .runners
             .unwrap_or(if opts.platform.starts_with("osx") { 5 } else { 20 }),
     };
-    // the schedule that finishes first on the runners and fits GitHub's size
-    // limit: more slack, fewer and fuller jobs
-    let mut best: Option<(f64, f64, Vec<Vec<String>>, String)> = None;
+    // the schedule that finishes first on the runners (and fits GitHub's size
+    // limit): more slack, fewer and fuller jobs
+    // (simulated duration, slack, jobs, workflow)
+    type Schedule = (f64, f64, Vec<Vec<String>>, Option<String>);
+    let mut best: Option<Schedule> = None;
     for slack in [
         0.0,
         30.0,
@@ -413,17 +433,21 @@ pub fn generate(recipes_dir: &Path, template: &Path, out: &Path, opts: &Options)
         f64::INFINITY,
     ] {
         let jobs = batch(&recipes, &clock, opts.max_batch, slack)?;
-        let yaml = render(&template, &jobs, &recipes)?;
+        let yaml = template
+            .as_ref()
+            .map(|t| render(t, &jobs, &recipes))
+            .transpose()?;
         let span = simulate(&jobs, &recipes, &clock);
+        let size = yaml.as_ref().map_or(0, String::len);
         if std::env::var_os("VINCA_RS_DEBUG").is_some() {
             eprintln!(
                 "slack {slack}: {} jobs, {:.0} min, {} KiB",
                 jobs.len(),
                 span / 60.0,
-                yaml.len() / 1024
+                size / 1024
             );
         }
-        if yaml.len() <= MAX_WORKFLOW_BYTES && best.as_ref().is_none_or(|b| span < b.0) {
+        if size <= MAX_WORKFLOW_BYTES && best.as_ref().is_none_or(|b| span < b.0) {
             best = Some((span, slack, jobs, yaml));
         }
     }
@@ -433,16 +457,75 @@ pub fn generate(recipes_dir: &Path, template: &Path, out: &Path, opts: &Options)
             MAX_WORKFLOW_BYTES / 1024
         )
     };
-    std::fs::write(out, &yaml)?;
+    if let (Some(out), Some(yaml)) = (outputs.workflow, &yaml) {
+        std::fs::write(out, yaml).with_context(|| out.display().to_string())?;
+    }
+    if let Some(out) = outputs.json {
+        std::fs::write(out, serde_json::to_string_pretty(&stages_json(&jobs, &recipes))?)
+            .with_context(|| out.display().to_string())?;
+    }
     eprintln!(
-        "{} recipes in {} jobs (slack {slack} s): {:.0} min on {} runners (estimate); {} KiB",
+        "{} recipes in {} jobs (slack {slack} s): {:.0} min on {} runners (estimate){}",
         recipes.len(),
         jobs.len(),
         span / 60.0,
         clock.runners,
-        yaml.len() / 1024
+        yaml.map(|y| format!("; {} KiB", y.len() / 1024))
+            .unwrap_or_default()
     );
     Ok(true)
+}
+
+fn job_needs(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> Vec<BTreeSet<usize>> {
+    let owner: HashMap<&String, usize> = jobs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, j)| j.iter().map(move |p| (p, i)))
+        .collect();
+    jobs.iter()
+        .enumerate()
+        .map(|(i, j)| {
+            j.iter()
+                .flat_map(|p| recipes[p].deps.iter().map(|d| owner[d]))
+                .filter(|&o| o != i)
+                .collect()
+        })
+        .collect()
+}
+
+fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serde_json::Value {
+    let needs = job_needs(jobs, recipes);
+    fn stage_of(i: usize, needs: &[BTreeSet<usize>], memo: &mut [Option<usize>]) -> usize {
+        if let Some(s) = memo[i] {
+            return s;
+        }
+        let s = needs[i]
+            .iter()
+            .map(|&n| stage_of(n, needs, memo) + 1)
+            .max()
+            .unwrap_or(0);
+        memo[i] = Some(s);
+        s
+    }
+    let mut memo = vec![None; jobs.len()];
+    let stage: Vec<usize> = (0..jobs.len()).map(|i| stage_of(i, &needs, &mut memo)).collect();
+    // ids as RoboStack/vinca#201 writes them: stage_<stage>_job_<index in the stage>
+    let mut id = vec![String::new(); jobs.len()];
+    let mut count = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
+    for i in 0..jobs.len() {
+        id[i] = format!("stage_{}_job_{}", stage[i], count[stage[i]]);
+        count[stage[i]] += 1;
+    }
+    let mut stages: Vec<Vec<serde_json::Value>> = vec![vec![]; count.len()];
+    for (i, job) in jobs.iter().enumerate() {
+        stages[stage[i]].push(serde_json::json!({
+            "id": id[i],
+            "name": job_name(job),
+            "recipes": job.join(" "),
+            "needs": needs[i].iter().map(|&n| id[n].clone()).collect::<Vec<_>>(),
+        }));
+    }
+    serde_json::json!({ "stages": stages })
 }
 
 /// When the last job ends: a job starts once its needs are done and a runner is

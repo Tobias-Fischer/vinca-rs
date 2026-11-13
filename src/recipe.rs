@@ -110,7 +110,10 @@ pub struct PostProcess {
     pub replacement: &'static str,
 }
 
-/// Relocate sysroot / macOS SDK paths baked into .pc and CMake files.
+/// Replace the build machine's sysroot / macOS SDK paths in .pc and CMake files
+/// with the environment's (CONDA_BUILD_SYSROOT, which conda's compiler activation
+/// sets): e.g. rtabmap's exported targets carry the SDK's usr/include, which
+/// doesn't exist on users' machines. rattler-build only relocates the prefixes.
 pub fn sysroot_post_process() -> Vec<PostProcess> {
     vec![
         PostProcess {

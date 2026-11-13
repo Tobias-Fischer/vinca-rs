@@ -8,13 +8,14 @@ mod license;
 mod recipe;
 mod selectors;
 mod skip_existing;
+mod snapshot;
 mod workflow;
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -45,7 +46,8 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// Generate the GitHub Actions workflow that builds a directory of recipes
+    /// Generate the CI jobs that build a directory of recipes: a GitHub Actions
+    /// workflow (from a template) and/or the jobs as JSON
     Workflow {
         #[arg(long, default_value = "recipes")]
         recipes: PathBuf,
@@ -53,9 +55,13 @@ enum Command {
         platform: String,
         /// workflow template: its jobs.build is copied for every job
         #[arg(long)]
-        template: PathBuf,
+        template: Option<PathBuf>,
+        /// the GitHub Actions workflow to write
         #[arg(long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
+        /// the jobs as JSON: {"stages": [[{"id", "name", "recipes", "needs"}]]}
+        #[arg(long)]
+        json: Option<PathBuf>,
         /// at most this many recipes per job
         #[arg(long, default_value_t = 25)]
         max_batch: usize,
@@ -66,6 +72,29 @@ enum Command {
         #[arg(long = "var", value_parser = parse_var)]
         vars: Vec<(String, String)>,
     },
+    /// Pin a distribution's releases and their dependencies (rosdistro_snapshot.yaml)
+    Snapshot {
+        #[arg(long, short)]
+        distro: String,
+        /// a git ref of ros/rosdistro, e.g. a sync tag such as `jazzy/2026-10-05`
+        /// (default: the published cache, the latest state)
+        #[arg(long)]
+        rosdistro_ref: Option<String>,
+        /// only this package and its dependencies
+        #[arg(long, short)]
+        package: Option<String>,
+        #[arg(long, short, default_value = "rosdistro_snapshot.yaml")]
+        out: PathBuf,
+    },
+    /// The requirements of every selected package for a platform, as JSON
+    Requirements {
+        #[arg(long, default_value = "vinca.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn parse_var(s: &str) -> Result<(String, String), String> {
@@ -74,19 +103,34 @@ fn parse_var(s: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("{s}: expected name=value"))
 }
 
-fn generate(
-    config: PathBuf,
-    platform: String,
-    out: PathBuf,
-    variant_config: PathBuf,
-    all: bool,
-) -> Result<()> {
-    let t0 = Instant::now();
-    let conf = config::read(&config, &platform)?;
-    let distro = distro::Distro::load(&conf)?;
-    eprintln!("config + rosdistro cache: {:.1?}", t0.elapsed());
+fn write_json(value: &serde_json::Value, out: Option<&Path>) -> Result<()> {
+    let text = serde_json::to_string_pretty(value)?;
+    match out {
+        Some(p) => std::fs::write(p, text).with_context(|| p.display().to_string()),
+        None => {
+            println!("{text}");
+            Ok(())
+        }
+    }
+}
 
-    let mut g = generate::Generator::new(&conf, &distro);
+struct Loaded {
+    conf: config::Config,
+    distro: distro::Distro,
+}
+
+fn load(config: &Path, platform: &str) -> Result<Loaded> {
+    let conf = config::read(config, platform)?;
+    let distro = distro::Distro::load(&conf)?;
+    Ok(Loaded { conf, distro })
+}
+
+/// The selection, with every package.xml it needs fetched, and ros_base's
+/// packages (for `<group_depend>`).
+fn select(
+    g: &generate::Generator,
+    distro: &distro::Distro,
+) -> Result<(generate::Selection, Vec<pixi_build_ros::package_xml::PackageXml>)> {
     let selection = g.select()?;
     let ros_base_names = distro.depends("ros_base", &HashSet::new())?;
     let fetched = distro.prefetch(selection.packages.iter().chain(ros_base_names.iter()))?;
@@ -94,10 +138,24 @@ fn generate(
         "{} packages selected; {fetched} package.xml files fetched",
         selection.packages.len()
     );
-    let ros_base: Vec<_> = ros_base_names
+    let ros_base = ros_base_names
         .iter()
         .filter_map(|p| distro.package(p).ok())
         .collect();
+    Ok((selection, ros_base))
+}
+
+fn generate_cmd(
+    config: PathBuf,
+    platform: String,
+    out: PathBuf,
+    variant_config: PathBuf,
+    all: bool,
+) -> Result<()> {
+    let t0 = Instant::now();
+    let Loaded { conf, distro } = load(&config, &platform)?;
+    let mut g = generate::Generator::new(&conf, &distro);
+    let (selection, ros_base) = select(&g, &distro)?;
 
     if out.exists() {
         std::fs::remove_dir_all(&out).with_context(|| out.display().to_string())?;
@@ -126,7 +184,6 @@ fn generate(
             g.unsatisfied.iter().cloned().collect::<Vec<_>>().join(", ")
         );
     }
-
     if !all && !conf.skip_existing.is_empty() {
         let published = skip_existing::published(&conf.skip_existing, &platform, &conf.ros_distro)?;
         let variants = variant_config.is_file().then_some(variant_config.as_path());
@@ -141,6 +198,27 @@ fn generate(
     Ok(())
 }
 
+fn requirements_cmd(config: PathBuf, platform: String, out: Option<PathBuf>) -> Result<()> {
+    let Loaded { conf, distro } = load(&config, &platform)?;
+    let mut g = generate::Generator::new(&conf, &distro);
+    let (selection, ros_base) = select(&g, &distro)?;
+    let mut packages = BTreeMap::new();
+    for ros in &selection.packages {
+        if let Some(dir) = g.package(ros, &ros_base)? {
+            packages.insert(ros.clone(), serde_json::to_value(&dir.recipe.requirements)?);
+        }
+    }
+    write_json(
+        &serde_json::json!({
+            "platform": platform,
+            "prefix": g.prefix(),
+            "packages": packages,
+            "run_constraints": conf.mutex.as_ref().map(|m| m.run_constraints.clone()).unwrap_or_default(),
+        }),
+        out.as_deref(),
+    )
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Generate {
@@ -149,16 +227,20 @@ fn main() -> Result<()> {
             out,
             variant_config,
             all,
-        } => generate(config, platform, out, variant_config, all),
+        } => generate_cmd(config, platform, out, variant_config, all),
         Command::Workflow {
             recipes,
             platform,
             template,
             out,
+            json,
             max_batch,
             timings,
             vars,
         } => {
+            if out.is_none() && json.is_none() {
+                bail!("nothing to write: give --out (with --template) and/or --json");
+            }
             let timings = match timings {
                 Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?)
                     .with_context(|| p.display().to_string())?,
@@ -170,10 +252,29 @@ fn main() -> Result<()> {
                 timings,
                 vars,
             };
-            if !workflow::generate(&recipes, &template, &out, &opts)? {
+            let outputs = workflow::Outputs {
+                template: template.as_deref(),
+                workflow: out.as_deref(),
+                json: json.as_deref(),
+            };
+            if !workflow::generate(&recipes, &outputs, &opts)? {
                 eprintln!("nothing to build");
+                if let Some(j) = json {
+                    std::fs::write(j, r#"{"stages": []}"#)?;
+                }
             }
             Ok(())
         }
+        Command::Snapshot {
+            distro,
+            rosdistro_ref,
+            package,
+            out,
+        } => snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out),
+        Command::Requirements {
+            config,
+            platform,
+            out,
+        } => requirements_cmd(config, platform, out),
     }
 }

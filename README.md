@@ -20,11 +20,21 @@ vinca-rs generate --config vinca.yaml --platform linux-64 --out recipes
 # every recipe, published or not
 vinca-rs generate --platform linux-64 --all
 
-# the workflow that builds ./recipes, from a template (see below)
-vinca-rs workflow --platform linux-64 --recipes recipes \
+# the CI jobs that build ./recipes: as JSON, {"stages": [[{"id", "name", "recipes",
+# "needs"}]]} (RoboStack/vinca#201's format), and/or a workflow from a template
+vinca-rs workflow --platform linux-64 --recipes recipes --timings build_timings.json \
+  --json jobs.json \
   --template .github/build-template.yaml --out .github/workflows/build.yaml \
-  --timings build_timings.json --var distro=humble --var branch=buildbranch_humble_linux_64
+  --var distro=humble --var branch=buildbranch_humble_linux_64
+
+# pin a distribution's releases with their dependencies (rosdistro_snapshot.yaml)
+vinca-rs snapshot --distro jazzy --rosdistro-ref jazzy/2026-10-05
+
+# every selected package's requirements, as JSON (for dependency/pinning tools)
+vinca-rs requirements --platform linux-64
 ```
+
+As a conda package: `pixi build`, or a source dependency of another pixi workspace.
 
 ## Configuration
 
@@ -38,7 +48,7 @@ platform. Unknown keys are errors.
 |---|---|
 | `ros_distro` | the rosdistro distribution |
 | `rosdistro_snapshot` | pinned releases with their dependencies (`vinca-snapshot`) |
-| `rosdistro_additional_recipes` | packages from elsewhere: `url`, `tag` or `rev`, `version`, `additional_folder`, `submodules`, `override` |
+| `rosdistro_additional_recipes` | packages from elsewhere: `url`, `tag` or `rev`, `version`, `additional_folder`, `package_xml_name`, `submodules`, `override` |
 | `packages_select_by_deps` | the packages to build, with their dependencies |
 | `packages_exclude` | not built, and dropped from other packages' dependencies |
 | `packages_skip` | not built; dependents keep the dependency |
@@ -75,14 +85,21 @@ These are vinca's recipes for RoboStack's humble (vinca 74d1e85 / RoboStack/vinc
   compares by meaning.
 - Platform selectors are resolved at generation, so each recipe carries the
   target's build script (`script: build_ament_cmake.sh`), not both.
+- ROS 2 only: the build scripts lost their catkin/ROS 1 parts; packages with build
+  type `cmake` (or none, i.e. catkin by REP 140) use `build_cmake.sh`.
 - Packages that only wrap a conda-forge package (`generate_dummy_package_with_run_deps`)
   only depend on it and the mutex.
 - Every ament package gets a `package_contents` test for its `package.xml` (#108).
 - Licenses: an explicit table maps the common non-SPDX names, and everything else
   has to be valid SPDX.
 
+`vinca-rs snapshot` writes the same snapshot as vinca-snapshot (checked for jazzy at
+`jazzy/2026-10-05`: 2469 packages, identical), in 23 s instead of 6 min. Snapshot
+entries without `dependencies` are an error: regenerate the snapshot.
+
 Not ported: ROS 1, GitLab/Azure pipelines, `vinca-migrate`, `variants_mode: local`,
-single-file recipes, archive and GitLab sources, remote `conda_index`.
+`skip_testing`, single-file recipes, archive and GitLab sources, remote `conda_index`,
+`-n` (skip-existing compares exact build strings).
 
 ## Development
 

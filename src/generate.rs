@@ -2,7 +2,7 @@
 //! resolution, the requirement rules, and the auxiliary recipes (mutex,
 //! legacy-name aliases, conda-forge wrappers).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
@@ -33,9 +33,6 @@ pub struct Generator<'a> {
 
 pub struct Selection {
     pub packages: Vec<String>,
-    /// package -> the configured packages that pulled it in
-    #[allow(dead_code)] // for a provenance report
-    pub required_by: BTreeMap<String, BTreeSet<String>>,
 }
 
 fn template(name: &str) -> Option<&'static str> {
@@ -44,8 +41,8 @@ fn template(name: &str) -> Option<&'static str> {
         "bld_ament_cmake.bat" => include_str!("../templates/bld_ament_cmake.bat.in"),
         "build_ament_python.sh" => include_str!("../templates/build_ament_python.sh.in"),
         "bld_ament_python.bat" => include_str!("../templates/bld_ament_python.bat.in"),
-        "build_catkin.sh" => include_str!("../templates/build_catkin.sh.in"),
-        "bld_catkin.bat" => include_str!("../templates/bld_catkin.bat.in"),
+        "build_cmake.sh" => include_str!("../templates/build_cmake.sh.in"),
+        "bld_cmake.bat" => include_str!("../templates/bld_cmake.bat.in"),
         "activate.sh" => include_str!("../templates/activate.sh.in"),
         "activate.bat" => include_str!("../templates/activate.bat.in"),
         "activate.ps1" => include_str!("../templates/activate.ps1.in"),
@@ -120,7 +117,7 @@ impl<'a> Generator<'a> {
 
     // ---------------------------------------------------------------- naming
 
-    fn prefix(&self) -> String {
+    pub fn prefix(&self) -> String {
         match self.conf.name_mode {
             PackageNameMode::Legacy => format!("ros-{}", self.distro.name),
             _ if self.distro.ros1 => "ros".into(),
@@ -216,7 +213,6 @@ impl<'a> Generator<'a> {
         }
         skip.extend(self.shadowed.iter().cloned());
         let mut selected = BTreeSet::new();
-        let mut required_by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for root in &self.conf.select_by_deps {
             let root = root.replace('-', "_");
             if self.shadowed.contains(&root) {
@@ -227,7 +223,6 @@ impl<'a> Generator<'a> {
                 continue;
             }
             for dep in self.distro.depends(&root, &skip)? {
-                required_by.entry(dep.clone()).or_default().insert(root.clone());
                 selected.insert(dep);
             }
         }
@@ -240,7 +235,6 @@ impl<'a> Generator<'a> {
         }
         Ok(Selection {
             packages: selected.into_iter().collect(),
-            required_by,
         })
     }
 
@@ -367,7 +361,8 @@ impl<'a> Generator<'a> {
         let script_base = match build_type.as_str() {
             "ament_cmake" => "ament_cmake",
             "ament_python" => "ament_python",
-            "cmake" | "catkin" => "catkin",
+            // no <build_type> means catkin (REP 140): in ROS 2, a plain CMake package
+            "cmake" | "catkin" => "cmake",
             other => {
                 eprintln!("{ros}: unsupported build type {other}");
                 return Ok(None);
@@ -402,7 +397,7 @@ impl<'a> Generator<'a> {
         ] {
             build.push(cross(s));
         }
-        if self.os == "osx" && matches!(script_base, "ament_cmake" | "catkin") {
+        if self.os == "osx" && matches!(script_base, "ament_cmake" | "cmake") {
             build.spec("clang-tools ${{ (cxx_compiler_version ~ '.*') if cxx_compiler_version is defined else '*' }}");
         }
         let mut host = Reqs::default();
@@ -527,7 +522,6 @@ impl<'a> Generator<'a> {
         recipe.tests.extend(self.tests(&conda, &mut files)?);
         let info = self.conf.info(&self.conf.short_name(&conda));
         let prefix = self.prefix();
-        let skip_testing = if self.conf.skip_testing { "ON" } else { "OFF" };
         let vars = [
             ("ros_package_prefix", prefix.as_str()),
             (
@@ -536,12 +530,12 @@ impl<'a> Generator<'a> {
             ),
             ("additional_folder", self.distro.additional_folder(ros)),
             ("ros_distro", self.distro.name.as_str()),
-            ("skip_testing", skip_testing),
         ];
         files
             .scripts
             .push((script.clone(), render(template(&script).unwrap(), &vars)));
-        if conda.contains("catkin") || conda.contains("workspace") {
+        // ros_workspace installs the environment's activation scripts
+        if ros == "ros_workspace" {
             for s in ["activate", "deactivate"] {
                 for ext in ["sh", "bat", "ps1"] {
                     let n = format!("{s}.{ext}");

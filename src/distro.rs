@@ -63,12 +63,148 @@ struct SourceRepo {
     url: Option<String>,
 }
 
-/// What the live rosdistro cache says about one released package.
-struct LiveRelease {
-    url: String,
-    tag: String,
-    version: String,
-    source_url: Option<String>,
+/// What rosdistro says about one released package.
+#[derive(Clone, PartialEq)]
+pub struct LiveRelease {
+    pub url: String,
+    pub tag: String,
+    /// upstream version, without the release increment
+    pub version: String,
+    pub source_url: Option<String>,
+}
+
+/// The rosdistro index entry, distribution file(s) and release cache of a distribution.
+pub struct Rosdistro {
+    pub ros1: bool,
+    pub python_version: u32,
+    pub releases: HashMap<String, LiveRelease>,
+    pub xmls: HashMap<String, String>,
+}
+
+fn releases_of(files: &[DistributionFile]) -> HashMap<String, LiveRelease> {
+    let mut live = HashMap::new();
+    for file in files {
+        for (repo_name, repo) in &file.repositories {
+            let Some(rel) = &repo.release else { continue };
+            let (Some(url), Some(version)) = (&rel.url, &rel.version) else {
+                continue;
+            };
+            let pkgs = rel.packages.clone().unwrap_or_else(|| vec![repo_name.clone()]);
+            for pkg in pkgs {
+                let tag = rel
+                    .tags
+                    .get("release")
+                    .cloned()
+                    .unwrap_or_else(|| "release/{package}/{version}".into())
+                    .replace("{package}", &pkg)
+                    .replace("{version}", version)
+                    .replace("{upstream_version}", version.split('-').next().unwrap());
+                live.insert(
+                    pkg,
+                    LiveRelease {
+                        url: url.clone(),
+                        tag,
+                        version: version.split('-').next().unwrap().to_string(),
+                        source_url: repo.source.as_ref().and_then(|s| s.url.clone()),
+                    },
+                );
+            }
+        }
+    }
+    live
+}
+
+pub fn client() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .user_agent("vinca-rs")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?)
+}
+
+const ROSDISTRO_RAW: &str = "https://raw.githubusercontent.com/ros/rosdistro";
+
+impl Rosdistro {
+    /// The published cache; with `rosdistro_ref` (e.g. a sync tag such as
+    /// `jazzy/2026-10-05`), the releases of that ref instead, keeping only the
+    /// cached package.xml files of releases that didn't change.
+    pub fn load(client: &reqwest::blocking::Client, name: &str, rosdistro_ref: Option<&str>) -> Result<Self> {
+        let index: Index = serde_yaml::from_str(&get(client, INDEX_URL)?.text()?)?;
+        let info = index
+            .distributions
+            .get(name)
+            .with_context(|| format!("{name} is not in the rosdistro index"))?;
+        let mut gz = Vec::new();
+        get(client, &info.distribution_cache)?.read_to_end(&mut gz)?;
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(&gz[..]).read_to_string(&mut text)?;
+        let cache: Cache = serde_yaml::from_str(&text).context("parsing the rosdistro cache")?;
+        let mut releases = releases_of(&cache.distribution_file);
+        let mut xmls = cache.release_package_xmls;
+        if let Some(r) = rosdistro_ref {
+            let index: serde_yaml::Value =
+                serde_yaml::from_str(&get(client, &format!("{ROSDISTRO_RAW}/{r}/index-v4.yaml"))?.text()?)?;
+            let urls: Vec<String> = match &index["distributions"][name]["distribution"] {
+                serde_yaml::Value::String(u) => vec![u.clone()],
+                serde_yaml::Value::Sequence(s) => {
+                    s.iter().filter_map(|u| u.as_str().map(String::from)).collect()
+                }
+                _ => bail!("{name} has no distribution file at rosdistro {r}"),
+            };
+            let mut files = vec![];
+            for u in urls {
+                // relative to the index, i.e. the files of the same ref
+                let u = if u.contains("://") {
+                    u
+                } else {
+                    format!("{ROSDISTRO_RAW}/{r}/{u}")
+                };
+                files.push(serde_yaml::from_str::<DistributionFile>(
+                    &get(client, &u)?.text()?,
+                )?);
+            }
+            let at_ref = releases_of(&files);
+            xmls.retain(|pkg, _| at_ref.get(pkg).is_some_and(|rel| releases.get(pkg) == Some(rel)));
+            releases = at_ref;
+        }
+        Ok(Self {
+            ros1: info.distribution_type == "ros1",
+            python_version: info.python_version,
+            releases,
+            xmls,
+        })
+    }
+
+    /// The package.xml of a release: cached, or from its release tag.
+    pub fn package_xml(&self, client: &reqwest::blocking::Client, pkg: &str) -> Result<String> {
+        if let Some(x) = self.xmls.get(pkg) {
+            return Ok(x.clone());
+        }
+        let rel = self
+            .releases
+            .get(pkg)
+            .with_context(|| format!("{pkg} is not released"))?;
+        let entry = SnapshotEntry {
+            url: rel.url.clone(),
+            version: rel.version.clone(),
+            tag: Some(rel.tag.clone()),
+            rev: None,
+            dependencies: None,
+            repository: None,
+            additional_folder: String::new(),
+            package_xml_name: None,
+            submodules: None,
+            override_reason: None,
+        };
+        Ok(get(client, &Distro::raw_url(&entry)?)?.text()?)
+    }
+
+    pub fn condition_env(&self, name: &str) -> HashMap<String, String> {
+        let mut env: HashMap<String, String> = std::env::vars().collect();
+        env.insert("ROS_DISTRO".into(), name.into());
+        env.insert("ROS_VERSION".into(), if self.ros1 { "1" } else { "2" }.into());
+        env.insert("ROS_PYTHON_VERSION".into(), self.python_version.to_string());
+        env
+    }
 }
 
 pub struct Distro {
@@ -108,65 +244,16 @@ fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blockin
 
 impl Distro {
     pub fn load(conf: &Config) -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("vinca-rs")
-            .timeout(std::time::Duration::from_secs(120))
-            .build()?;
-        let index: Index = serde_yaml::from_str(&get(&client, INDEX_URL)?.text()?)?;
-        let info = index
-            .distributions
-            .get(&conf.ros_distro)
-            .with_context(|| format!("{} is not in the rosdistro index", conf.ros_distro))?;
-        let mut gz = Vec::new();
-        get(&client, &info.distribution_cache)?.read_to_end(&mut gz)?;
-        let mut text = String::new();
-        flate2::read::GzDecoder::new(&gz[..]).read_to_string(&mut text)?;
-        let cache: Cache = serde_yaml::from_str(&text).context("parsing the rosdistro cache")?;
-
-        let mut live = HashMap::new();
-        for file in &cache.distribution_file {
-            for (repo_name, repo) in &file.repositories {
-                let Some(rel) = &repo.release else { continue };
-                let (Some(url), Some(version)) = (&rel.url, &rel.version) else {
-                    continue;
-                };
-                let pkgs = rel.packages.clone().unwrap_or_else(|| vec![repo_name.clone()]);
-                for pkg in pkgs {
-                    let tag = rel
-                        .tags
-                        .get("release")
-                        .cloned()
-                        .unwrap_or_else(|| "release/{package}/{version}".into())
-                        .replace("{package}", &pkg)
-                        .replace("{version}", version)
-                        .replace("{upstream_version}", version.split('-').next().unwrap());
-                    live.insert(
-                        pkg,
-                        LiveRelease {
-                            url: url.clone(),
-                            tag,
-                            version: version.split('-').next().unwrap().to_string(),
-                            source_url: repo.source.as_ref().and_then(|s| s.url.clone()),
-                        },
-                    );
-                }
-            }
-        }
-
-        let ros1 = info.distribution_type == "ros1";
-        let mut condition_env: HashMap<String, String> = std::env::vars().collect();
-        condition_env.insert("ROS_DISTRO".into(), conf.ros_distro.clone());
-        condition_env.insert("ROS_VERSION".into(), if ros1 { "1" } else { "2" }.into());
-        condition_env.insert("ROS_PYTHON_VERSION".into(), info.python_version.to_string());
-
+        let client = client()?;
+        let rd = Rosdistro::load(&client, &conf.ros_distro, None)?;
         Ok(Self {
             name: conf.ros_distro.clone(),
-            ros1,
-            condition_env,
+            ros1: rd.ros1,
+            condition_env: rd.condition_env(&conf.ros_distro),
             snapshot: conf.snapshot.clone(),
             additional: conf.additional.clone(),
-            cache_xmls: cache.release_package_xmls,
-            live,
+            cache_xmls: rd.xmls,
+            live: rd.releases,
             fetched: Mutex::new(HashMap::new()),
             client,
         })
@@ -259,7 +346,10 @@ impl Distro {
         }
         match self.entry(pkg).and_then(|e| e.dependencies.clone()) {
             Some(d) => Ok(d.into_iter().collect()),
-            None => bail!("snapshot entry of {pkg} has no dependencies: regenerate the snapshot"),
+            None => bail!(
+                "the snapshot entry of {pkg} has no dependencies: regenerate the snapshot \
+                 (`vinca-rs snapshot --distro <distro>`)"
+            ),
         }
     }
 
@@ -288,7 +378,7 @@ impl Distro {
         Ok(deps)
     }
 
-    fn raw_url(e: &SnapshotEntry) -> Result<String> {
+    pub fn raw_url(e: &SnapshotEntry) -> Result<String> {
         let base = e.url.strip_suffix(".git").unwrap_or(&e.url);
         let Some(owner_repo) = base.split("github.com/").nth(1) else {
             bail!("only GitHub sources are supported: {}", e.url)
@@ -304,7 +394,8 @@ impl Distro {
             format!("{}/", e.additional_folder)
         };
         Ok(format!(
-            "https://raw.githubusercontent.com/{owner_repo}/{reference}/{folder}package.xml"
+            "https://raw.githubusercontent.com/{owner_repo}/{reference}/{folder}{}",
+            e.package_xml_name.as_deref().unwrap_or("package.xml")
         ))
     }
 

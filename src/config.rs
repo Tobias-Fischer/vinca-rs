@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use indexmap::{IndexMap, IndexSet};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
 use crate::selectors::evaluate_for_platform;
@@ -23,7 +23,7 @@ const LAYERED_LISTS: [&str; 3] = ["packages_select_by_deps", "packages_exclude",
 // schemas (vinca/schemas.py)
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageNameMode {
     #[default]
@@ -32,7 +32,7 @@ pub enum PackageNameMode {
     New,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MutexPackage {
     pub name: String,
@@ -60,7 +60,7 @@ pub struct DepMods {
     pub remove_run: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DummyPackage {
     pub dep_name: String,
@@ -69,7 +69,7 @@ pub struct DummyPackage {
     pub override_version: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PkgAdditionalInfo {
     #[serde(default)]
@@ -90,6 +90,9 @@ pub struct SnapshotEntry {
     pub repository: Option<String>,
     #[serde(default)]
     pub additional_folder: String,
+    /// rosdistro_additional_recipes.yaml: the package.xml's file name, when the
+    /// repository stores it under another (e.g. package_ROS2.xml)
+    pub package_xml_name: Option<String>,
     /// rosdistro_additional_recipes.yaml: whether to clone git submodules
     /// (rattler-build's default: yes)
     pub submodules: Option<bool>,
@@ -140,17 +143,11 @@ struct VincaYaml {
     packages_skip: Vec<String>,
     #[serde(default)]
     skip_existing: Vec<String>,
-    #[serde(default = "yes")]
-    skip_testing: bool,
     // read by the CI workflow generator, which moves to the monorepo
     #[allow(dead_code)]
     setup_pixi_version: Option<String>,
     #[allow(dead_code)]
     pixi_version: Option<String>,
-}
-
-fn yes() -> bool {
-    true
 }
 
 // ----------------------------------------------------------------------------
@@ -179,7 +176,6 @@ pub struct Config {
     pub snapshot: IndexMap<String, SnapshotEntry>,
     pub additional: IndexMap<String, SnapshotEntry>,
     pub skip_existing: Vec<String>,
-    pub skip_testing: bool,
 }
 
 pub fn load_yaml(path: &Path) -> Result<Value> {
@@ -460,7 +456,6 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
         snapshot,
         additional,
         skip_existing: conf.skip_existing,
-        skip_testing: conf.skip_testing,
     })
 }
 
