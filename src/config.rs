@@ -188,11 +188,7 @@ pub type Patches = HashMap<String, HashMap<PatchTarget, Vec<PathBuf>>>;
 /// `ros-<pkg>`) loses its prefix.
 pub fn package_key(name: &str, distro: &str) -> String {
     let legacy = format!("ros-{distro}-");
-    name.strip_prefix(&legacy)
-        .or_else(|| name.strip_prefix("ros2-"))
-        .or_else(|| name.strip_prefix("ros-"))
-        .unwrap_or(name)
-        .replace('-', "_")
+    name.strip_prefix(&legacy).or_else(|| name.strip_prefix("ros2-")).unwrap_or(name).replace('-', "_")
 }
 
 /// The merged `vinca.yaml` layers, and what is read next to them.
@@ -247,6 +243,9 @@ pub struct Config {
     depmods: HashMap<String, DepMods>,
     #[serde(skip)]
     additional_info: HashMap<String, PkgAdditionalInfo>,
+    /// the per-package entries of the distribution's own layers (not of the base one)
+    #[serde(skip)]
+    own_entries: BTreeSet<(&'static str, String)>,
     /// conda_index files, the extending configuration's first
     #[serde(skip)]
     pub conda_indexes: Vec<CondaIndex>,
@@ -437,24 +436,43 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
 
     let mut depmods = Mapping::new();
     let mut additional_info = Mapping::new();
-    for (dir, layer) in &layers {
+    for (i, (dir, layer)) in layers.iter().enumerate() {
+        // the distribution's own entries, checked against its packages: those of every
+        // layer but the one the others extend (shared by every distribution)
+        let mut own_entries = vec![];
+        let mut note = |what: &'static str, keys: Vec<String>| {
+            if i > 0 || layers.len() == 1 {
+                own_entries.extend(keys.into_iter().map(|k| (what, k)));
+            }
+        };
+        let roots = names(layer.get("packages_select_by_deps"));
+        note("packages_select_by_deps", roots.iter().map(|n| n.replace('-', "_")).collect());
         if let Some(Value::String(pd)) = layer.get("patch_dir") {
             let pd = PathBuf::from(pd);
-            conf.patches.extend(discover_patches(&pd, &conf.ros_distro)?);
+            let patches = discover_patches(&pd, &conf.ros_distro)?;
+            note("patches", patches.keys().cloned().collect());
+            conf.patches.extend(patches);
             let deps = pd.join("dependencies.yaml");
             if deps.exists() {
                 let own = by_package_key(selected_mapping(&deps, platform)?, &conf.ros_distro);
+                note("dependencies.yaml", own.keys().filter_map(|k| k.as_str().map(String::from)).collect());
                 merge_per_package(&mut depmods, &own);
             }
         }
         let (t, f) = discover_tests(dir, &conf.ros_distro);
+        note("tests", t.keys().chain(f.keys()).cloned().collect());
         conf.tests.extend(t);
         conf.test_folders.extend(f);
         let info = dir.join("pkg_additional_info.yaml");
         if info.exists() {
             let own = by_package_key(selected_mapping(&info, platform)?, &conf.ros_distro);
+            note(
+                "pkg_additional_info.yaml",
+                own.keys().filter_map(|k| k.as_str().map(String::from)).collect(),
+            );
             merge_per_package(&mut additional_info, &own);
         }
+        conf.own_entries.extend(own_entries);
         let mut layer_indexes = vec![];
         for i in names(layer.get("conda_index")) {
             let p = dir.join(&i);
@@ -559,18 +577,11 @@ impl Config {
         self.depmods.get(&self.key(name))
     }
 
-    /// The per-package entries (patches, tests, dependencies.yaml,
-    /// pkg_additional_info.yaml) for which `known` is false, e.g. typos:
-    /// "<where>: <package>".
+    /// The distribution's own entries (its packages_select_by_deps, patches, tests,
+    /// dependencies.yaml, pkg_additional_info.yaml) for which `known` is false, e.g.
+    /// typos or stale entries: "<where>: <package>".
     pub fn unmatched(&self, known: impl Fn(&str) -> bool) -> Vec<String> {
-        let found = (self.patches.keys().map(|k| ("patches", k)))
-            .chain(self.tests.keys().map(|k| ("tests", k)))
-            .chain(self.test_folders.keys().map(|k| ("tests", k)))
-            .chain(self.depmods.keys().map(|k| ("dependencies.yaml", k)))
-            .chain(self.additional_info.keys().map(|k| ("pkg_additional_info.yaml", k)));
-        let unmatched: BTreeSet<String> =
-            found.filter(|(_, k)| !known(k)).map(|(w, k)| format!("{w}: {k}")).collect();
-        unmatched.into_iter().collect()
+        self.own_entries.iter().filter(|(_, k)| !known(k)).map(|(w, k)| format!("{w}: {k}")).collect()
     }
 }
 
@@ -591,12 +602,14 @@ mod tests {
 
     #[test]
     fn package_keys() {
-        for n in ["ros2-foo-bar", "ros-humble-foo-bar", "ros-foo-bar", "foo_bar", "foo-bar"] {
+        for n in ["ros2-foo-bar", "ros-humble-foo-bar", "foo_bar", "foo-bar"] {
             assert_eq!(package_key(n, "humble"), "foo_bar", "{n}");
         }
         assert_eq!(package_key("ros2-ros-workspace", "humble"), "ros_workspace");
         assert_eq!(package_key("ros_workspace", "humble"), "ros_workspace");
         assert_eq!(package_key("ros2_control", "humble"), "ros2_control");
+        // a ROS name written with dashes, not a conda prefix
+        assert_eq!(package_key("ros-gz-bridge", "humble"), "ros_gz_bridge");
     }
 
     #[test]

@@ -252,14 +252,10 @@ impl<'a> Generator<'a> {
         }
         skip.extend(self.shadowed.iter().cloned());
         let mut selected = BTreeSet::new();
-        let mut unknown = vec![];
         for root in &self.conf.packages_select_by_deps {
             let root = root.replace('-', "_");
             if self.shadowed.contains(&root) {
                 continue;
-            }
-            if !self.distro.has(&root) {
-                unknown.push(root.clone());
             }
             selected.insert(root.clone());
             if skip.contains(&root) {
@@ -268,9 +264,6 @@ impl<'a> Generator<'a> {
             for dep in self.distro.depends(&root, &skip)? {
                 selected.insert(dep);
             }
-        }
-        if !unknown.is_empty() {
-            eprintln!("warning: packages_select_by_deps not in the distribution: {}", unknown.join(", "));
         }
         if !self.distro.ros1 && selected.iter().any(|p| !CORE.contains(&p.as_str())) {
             for p in ["ros_workspace", "ros_environment"] {

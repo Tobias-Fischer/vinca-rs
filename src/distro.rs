@@ -180,11 +180,6 @@ pub fn client() -> Result<reqwest::blocking::Client> {
         .map_err(Error::Client)
 }
 
-/// Environment variables that package.xml conditions may take from the caller:
-/// the Gazebo release to build against (`$GZ_VERSION == harmonic`), which no
-/// distribution fixes. Unset in RoboStack.
-const CONDITION_PASS_THROUGH: [&str; 2] = ["GZ_VERSION", "IGNITION_VERSION"];
-
 const ROSDISTRO_RAW: &str = "https://raw.githubusercontent.com/ros/rosdistro";
 
 impl Rosdistro {
@@ -252,14 +247,10 @@ impl Rosdistro {
     /// don't depend on the caller's shell: the distribution's ROS_DISTRO,
     /// ROS_VERSION and ROS_PYTHON_VERSION; CONDA_PREFIX set and HOMEBREW_PREFIX not,
     /// as the packages are built with conda (e.g. the Gazebo vendor packages then
-    /// use conda's libraries, as they did when vinca ran in a pixi environment);
-    /// and, from the environment, only the `CONDITION_PASS_THROUGH` variables.
+    /// use conda's libraries, as they did when vinca ran in a pixi environment).
     /// Every other variable is unset, i.e. `''` in a condition.
     pub fn condition_env(&self, name: &str) -> HashMap<String, String> {
-        let mut env: HashMap<String, String> = CONDITION_PASS_THROUGH
-            .iter()
-            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
-            .collect();
+        let mut env = HashMap::new();
         env.insert("ROS_DISTRO".into(), name.into());
         env.insert("ROS_VERSION".into(), if self.ros1 { "1" } else { "2" }.into());
         env.insert("ROS_PYTHON_VERSION".into(), self.python_version.to_string());
