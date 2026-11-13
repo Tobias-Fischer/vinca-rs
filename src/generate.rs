@@ -545,6 +545,7 @@ impl<'a> Generator<'a> {
         if emscripten {
             run.remove("cmake");
         }
+        // spellchecker:off
         // mimick_vendor runs on the build machine; it doesn't build for Emscripten
         let mimick = self.conda_name("mimick_vendor");
         let had = host.remove(&mimick);
@@ -553,6 +554,7 @@ impl<'a> Generator<'a> {
         } else {
             build.extend(had);
         }
+        // spellchecker:on
         // Emscripten resolves the generators out of `build`
         let gens = self.conda_name("rosidl_default_generators");
         if emscripten && host.contains(&gens) {

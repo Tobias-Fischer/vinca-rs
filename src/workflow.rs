@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn cycle_is_an_error() {
         let recipes = recipes(&[("a", &["b"], false), ("b", &["a"], false)]);
-        assert!(levels(&recipes).unwrap_err().to_string().contains("cycle"));
+        insta::assert_snapshot!(levels(&recipes).unwrap_err(), @"dependency cycle: a -> b -> a");
     }
 
     #[test]
@@ -705,12 +705,18 @@ mod tests {
         assert_eq!(jobs, [vec!["a", "b"], vec!["c"]]);
         let tpl: Value =
             serde_yaml::from_str("on: push\njobs:\n  build:\n    steps: [{run: 'build @recipes@'}]").unwrap();
-        let yaml = render(&tpl, &jobs, &job_needs(&jobs, &recipes)).unwrap();
-        let wf: Value = serde_yaml::from_str(&yaml).unwrap();
-        assert!(wf["jobs"]["job_0"].get("needs").is_none());
-        assert!(wf["jobs"]["job_1"].get("needs").is_none());
-        assert_eq!(wf["jobs"]["job_0"]["steps"][0]["run"], "build a b");
-        assert!(yaml.starts_with("on:"));
+        insta::assert_snapshot!(render(&tpl, &jobs, &job_needs(&jobs, &recipes)).unwrap(), @"
+        on: push
+        jobs:
+          job_0:
+            name: a b
+            steps:
+            - run: build a b
+          job_1:
+            name: c
+            steps:
+            - run: build c
+        ");
     }
 
     #[test]
@@ -757,11 +763,30 @@ mod tests {
     fn json_stages_use_vinca_ids() {
         let recipes = recipes(&[("a", &[], false), ("b", &["a"], false)]);
         let jobs = vec![vec!["a".to_string()], vec!["b".to_string()]];
-        let j = stages_json(&jobs, &[0, 1], &job_needs(&jobs, &recipes));
-        assert_eq!(j["stages"][0][0]["id"], "stage_0_job_0");
-        assert_eq!(j["stages"][1][0]["id"], "stage_1_job_0");
-        assert_eq!(j["stages"][1][0]["needs"], serde_json::json!(["stage_0_job_0"]));
-        assert_eq!(j["stages"][1][0]["recipes"], "b");
+        insta::assert_json_snapshot!(stages_json(&jobs, &[0, 1], &job_needs(&jobs, &recipes)), @r#"
+        {
+          "stages": [
+            [
+              {
+                "id": "stage_0_job_0",
+                "name": "a",
+                "recipes": "a",
+                "needs": []
+              }
+            ],
+            [
+              {
+                "id": "stage_1_job_0",
+                "name": "b",
+                "recipes": "b",
+                "needs": [
+                  "stage_0_job_0"
+                ]
+              }
+            ]
+          ]
+        }
+        "#);
     }
 
     #[test]

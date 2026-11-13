@@ -137,8 +137,11 @@ strings.
 ## For contributors
 
 ```bash
-pixi run test   # cargo test
-pixi run lint   # cargo fmt, cargo clippy --all-targets -- -D warnings
+pixi run test         # cargo test
+pixi run lint         # cargo fmt, cargo clippy --all-targets -- -D warnings
+pixi run typos
+pixi run toml-format
+pixi run toml-lint
 ```
 
 Data flow of `generate`, one module each:
