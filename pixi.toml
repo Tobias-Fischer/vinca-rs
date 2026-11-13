@@ -8,7 +8,7 @@ preview = ["pixi-build"]
 # workspace (e.g. RoboStack's): vinca-rs = { git = "https://github.com/Tobias-Fischer/vinca-rs" }
 [package]
 name = "vinca-rs"
-version = "0.1.0"
+version = "0.1.1"
 
 [package.build.backend]
 name = "pixi-build-rust"
