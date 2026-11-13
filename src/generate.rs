@@ -78,8 +78,7 @@ impl<'a> Generator<'a> {
     pub fn prefix(&self) -> String {
         match self.conf.package_name_mode {
             PackageNameMode::Legacy => format!("ros-{}", self.distro.name),
-            _ if self.distro.ros1 => "ros".into(),
-            _ => "ros2".into(),
+            _ => self.ros_distro().package_prefix(),
         }
     }
 
@@ -346,6 +345,7 @@ impl<'a> Generator<'a> {
             format!("%SRC_DIR%\\%PKG_NAME%\\src\\work\\{folder}")
         };
         let vars = ScriptVars {
+            generator: "vinca-rs (https://github.com/Tobias-Fischer/vinca-rs)",
             source_dir: &source_dir,
             package_prefix: &prefix,
             distro: &self.distro.name,
