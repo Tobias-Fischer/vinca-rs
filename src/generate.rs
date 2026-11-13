@@ -8,9 +8,7 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
-use pixi_build_ros::build_script::{
-    ACTIVATION_SCRIPTS, BuildMode, BuildType, ScriptVars, render_build_script, script_name,
-};
+use pixi_build_ros::build_script::{BuildMode, BuildType, ScriptVars, render_build_script, script_name};
 use pixi_build_ros::distro::RosVersion;
 use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
 use pixi_build_ros::package_xml::PackageXml;
@@ -22,6 +20,17 @@ use crate::config::{self, Config, PackageNameMode};
 use crate::distro::{self, Distro};
 use crate::recipe::*;
 use crate::selectors::evaluate_distro;
+
+/// The environment activation scripts that `ros_workspace` installs (its build
+/// script copies them from the recipe directory): file name and content.
+const ACTIVATION_SCRIPTS: [(&str, &str); 6] = [
+    ("activate.sh", include_str!("activation/activate.sh")),
+    ("activate.bat", include_str!("activation/activate.bat")),
+    ("activate.ps1", include_str!("activation/activate.ps1")),
+    ("deactivate.sh", include_str!("activation/deactivate.sh")),
+    ("deactivate.bat", include_str!("activation/deactivate.bat")),
+    ("deactivate.ps1", include_str!("activation/deactivate.ps1")),
+];
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
