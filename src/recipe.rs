@@ -182,8 +182,16 @@ pub struct Build {
     /// a build script next to the recipe; none: a package without content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noarch: Option<Noarch>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub post_process: Vec<PostProcess>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Noarch {
+    Generic,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -242,7 +250,13 @@ impl Recipe {
         Recipe {
             package: Package { name: name.into(), version: version.into() },
             source: None,
-            build: Build { number, string: None, script: Some(String::new()), post_process: vec![] },
+            build: Build {
+                number,
+                string: None,
+                script: Some(String::new()),
+                noarch: None,
+                post_process: vec![],
+            },
             requirements: Requirements::default(),
             tests: vec![],
             about: About::default(),

@@ -6,6 +6,7 @@ package:
 build:
   number: 7
   script: ''
+  noarch: generic
 requirements:
   run:
   - ros2-demo-py ==0.4.0

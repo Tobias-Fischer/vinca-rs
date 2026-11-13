@@ -2057,7 +2057,7 @@ dependencies = [
 [[package]]
 name = "fancy_display"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "console",
 ]
@@ -4505,7 +4505,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pixi-build-ros"
 version = "0.7.7"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "async-trait",
  "fs-err",
@@ -4516,15 +4516,16 @@ dependencies = [
  "pixi_build_discovery",
  "pixi_build_types",
  "pixi_glob",
- "rattler_build_jinja",
- "rattler_build_recipe",
- "rattler_build_types",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_recipe 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "rattler_conda_types",
  "regex",
  "roxmltree",
  "serde",
  "serde_json",
  "serde_yaml",
+ "spdx",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -4534,7 +4535,7 @@ dependencies = [
 [[package]]
 name = "pixi_auth"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "pixi_config",
  "rattler_networking",
@@ -4544,7 +4545,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_backend"
 version = "0.1.7"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "async-trait",
  "clap",
@@ -4562,11 +4563,11 @@ dependencies = [
  "ordermap",
  "pathdiff",
  "pixi_build_types",
- "rattler_build_core",
- "rattler_build_jinja",
- "rattler_build_recipe",
- "rattler_build_types",
- "rattler_build_variant_config",
+ "rattler_build_core 0.2.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_recipe 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_variant_config 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "rattler_conda_types",
  "rattler_digest",
  "rattler_virtual_packages",
@@ -4584,7 +4585,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_discovery"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "dunce",
  "itertools 0.15.0",
@@ -4606,7 +4607,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_type_conversions"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "itertools 0.15.0",
  "ordermap",
@@ -4620,7 +4621,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_types"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "hex",
  "ordermap",
@@ -4637,7 +4638,7 @@ dependencies = [
 [[package]]
 name = "pixi_config"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "clap",
  "console",
@@ -4668,7 +4669,7 @@ dependencies = [
 [[package]]
 name = "pixi_consts"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "console",
  "rattler_cache",
@@ -4679,7 +4680,7 @@ dependencies = [
 [[package]]
 name = "pixi_git"
 version = "0.0.1"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "astral-reqwest-middleware",
  "dashmap",
@@ -4701,7 +4702,7 @@ dependencies = [
 [[package]]
 name = "pixi_glob"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "dashmap",
  "fs-err",
@@ -4719,7 +4720,7 @@ dependencies = [
 [[package]]
 name = "pixi_manifest"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "archspec",
  "chrono",
@@ -4752,7 +4753,7 @@ dependencies = [
  "regex",
  "serde",
  "serde-value",
- "spdx 0.13.6",
+ "spdx",
  "strsim",
  "strum",
  "thiserror 2.0.21",
@@ -4766,7 +4767,7 @@ dependencies = [
 [[package]]
 name = "pixi_path"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "fs-err",
  "serde",
@@ -4777,7 +4778,7 @@ dependencies = [
 [[package]]
 name = "pixi_pypi_spec"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "itertools 0.15.0",
  "pep440_rs",
@@ -4797,7 +4798,7 @@ dependencies = [
 [[package]]
 name = "pixi_spec"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "chrono",
  "dirs 7.0.0",
@@ -4831,7 +4832,7 @@ dependencies = [
 [[package]]
 name = "pixi_spec_containers"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "itertools 0.15.0",
  "ordermap",
@@ -4843,7 +4844,7 @@ dependencies = [
 [[package]]
 name = "pixi_stable_hash"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "ordermap",
  "rattler_conda_types",
@@ -4854,7 +4855,7 @@ dependencies = [
 [[package]]
 name = "pixi_toml"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "digest 0.11.3",
  "hex",
@@ -4869,7 +4870,7 @@ dependencies = [
 [[package]]
 name = "pixi_toml_edit"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "thiserror 2.0.21",
  "toml_edit",
@@ -4878,7 +4879,7 @@ dependencies = [
 [[package]]
 name = "pixi_utils"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "astral-reqwest-middleware",
  "astral-reqwest-retry",
@@ -4919,7 +4920,7 @@ dependencies = [
 [[package]]
 name = "pixi_variant"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=a5e2ce6186c2c4143838b8db209c81843c8b8a4f#a5e2ce6186c2c4143838b8db209c81843c8b8a4f"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
 dependencies = [
  "serde",
 ]
@@ -5378,12 +5379,12 @@ dependencies = [
  "num_cpus",
  "pathdiff",
  "rattler",
- "rattler_build_jinja",
- "rattler_build_networking",
- "rattler_build_recipe",
- "rattler_build_script",
- "rattler_build_source_cache",
- "rattler_build_types",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_networking 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_recipe 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_script 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_source_cache 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "rattler_cache",
  "rattler_conda_types",
  "rattler_config",
@@ -5428,6 +5429,89 @@ dependencies = [
 ]
 
 [[package]]
+name = "rattler_build_core"
+version = "0.2.24"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "anyhow",
+ "arwen-codesign",
+ "astral-reqwest-middleware",
+ "async-once-cell",
+ "async-recursion",
+ "clap",
+ "clap-verbosity-flag",
+ "comfy-table",
+ "console",
+ "content_inspector",
+ "dunce",
+ "flickzeug",
+ "fs-err",
+ "futures",
+ "globset",
+ "goblin",
+ "hex",
+ "ignore",
+ "indexmap 2.14.2",
+ "indicatif",
+ "itertools 0.15.0",
+ "jiff",
+ "line-ending",
+ "memchr",
+ "memmap2",
+ "miette",
+ "minijinja 3.1.0",
+ "num_cpus",
+ "pathdiff",
+ "rattler",
+ "rattler_build_jinja 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_networking 0.1.20 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_recipe 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_script 0.2.19 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_source_cache 0.1.22 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_types 0.1.22 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_cache",
+ "rattler_conda_types",
+ "rattler_config",
+ "rattler_digest",
+ "rattler_git",
+ "rattler_index",
+ "rattler_menuinst",
+ "rattler_networking",
+ "rattler_package_streaming",
+ "rattler_redaction",
+ "rattler_repodata_gateway",
+ "rattler_shell",
+ "rattler_solve",
+ "rattler_upload",
+ "rattler_virtual_packages",
+ "rayon",
+ "reflink-copy",
+ "regex",
+ "reqwest 0.13.5",
+ "retry-policies",
+ "scroll",
+ "serde",
+ "serde-untagged",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "sha2 0.11.1",
+ "tempfile",
+ "terminal_size",
+ "text-stub-library",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util 0.7.20",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "unicode-normalization",
+ "url",
+ "walkdir",
+ "which",
+]
+
+[[package]]
 name = "rattler_build_jinja"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5439,7 +5523,29 @@ dependencies = [
  "lazy_static",
  "minijinja 3.1.0",
  "minijinja-contrib",
- "rattler_build_types",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_conda_types",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "strum",
+ "thiserror 2.0.21",
+ "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
+name = "rattler_build_jinja"
+version = "0.1.24"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "fs-err",
+ "indexmap 2.14.2",
+ "itertools 0.15.0",
+ "lazy_static",
+ "minijinja 3.1.0",
+ "minijinja-contrib",
+ "rattler_build_types 0.1.22 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
  "rattler_conda_types",
  "serde",
  "serde_json",
@@ -5464,6 +5570,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rattler_build_networking"
+version = "0.1.20"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "astral-reqwest-middleware",
+ "astral-reqwest-retry",
+ "rattler_networking",
+ "reqwest 0.13.5",
+ "url",
+]
+
+[[package]]
 name = "rattler_build_recipe"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5479,11 +5597,11 @@ dependencies = [
  "minijinja 3.1.0",
  "pathdiff",
  "petgraph",
- "rattler_build_jinja",
- "rattler_build_script",
- "rattler_build_types",
- "rattler_build_variant_config",
- "rattler_build_yaml_parser",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_script 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_variant_config 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_yaml_parser 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "rattler_conda_types",
  "rattler_digest",
  "regex",
@@ -5493,7 +5611,41 @@ dependencies = [
  "serde_with",
  "serde_yaml",
  "sha1 0.11.0",
- "spdx 0.13.6",
+ "spdx",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
+name = "rattler_build_recipe"
+version = "0.1.24"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "fs-err",
+ "globset",
+ "hex",
+ "indexmap 2.14.2",
+ "itertools 0.15.0",
+ "marked-yaml",
+ "miette",
+ "minijinja 3.1.0",
+ "pathdiff",
+ "petgraph",
+ "rattler_build_jinja 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_script 0.2.19 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_types 0.1.22 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_variant_config 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_yaml_parser 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_conda_types",
+ "rattler_digest",
+ "regex",
+ "serde",
+ "serde-value",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "sha1 0.11.0",
+ "spdx",
  "thiserror 2.0.21",
  "url",
 ]
@@ -5503,6 +5655,31 @@ name = "rattler_build_script"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7aae8d24758da32dc61bb7ff88e97e4993a13776db8dc226201ffdd093de72d9"
+dependencies = [
+ "async-trait",
+ "clap",
+ "console",
+ "fs-err",
+ "futures",
+ "indexmap 2.14.2",
+ "itertools 0.15.0",
+ "minijinja 3.1.0",
+ "rattler_conda_types",
+ "rattler_shell",
+ "serde",
+ "strsim",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util 0.7.20",
+ "tracing",
+ "which",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rattler_build_script"
+version = "0.2.19"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
 dependencies = [
  "async-trait",
  "clap",
@@ -5543,7 +5720,45 @@ dependencies = [
  "jiff",
  "lzma-rust2",
  "md-5",
- "rattler_build_networking",
+ "rattler_build_networking 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_git",
+ "rattler_prefix_guard",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sevenz-rust2",
+ "sha2 0.11.1",
+ "sigstore-verify",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "rattler_build_source_cache"
+version = "0.1.22"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "astral-reqwest-middleware",
+ "astral-reqwest-retry",
+ "async-trait",
+ "bzip2",
+ "dunce",
+ "flate2",
+ "fs-err",
+ "futures",
+ "hex",
+ "indicatif",
+ "jiff",
+ "lzma-rust2",
+ "md-5",
+ "rattler_build_networking 0.1.20 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
  "rattler_git",
  "rattler_prefix_guard",
  "reqwest 0.13.5",
@@ -5580,6 +5795,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rattler_build_types"
+version = "0.1.22"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "globset",
+ "itertools 0.15.0",
+ "rattler_conda_types",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rattler_build_variant_config"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5589,9 +5819,29 @@ dependencies = [
  "marked-yaml",
  "miette",
  "minijinja 3.1.0",
- "rattler_build_jinja",
- "rattler_build_types",
- "rattler_build_yaml_parser",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_types 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_yaml_parser 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_conda_types",
+ "regex",
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "rattler_build_variant_config"
+version = "0.1.24"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "fs-err",
+ "marked-yaml",
+ "miette",
+ "minijinja 3.1.0",
+ "rattler_build_jinja 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_types 0.1.22 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_yaml_parser 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
  "rattler_conda_types",
  "regex",
  "serde",
@@ -5608,7 +5858,19 @@ checksum = "4137d4e438d38efca1b2c553240573447c1a8c0967a8afbf200576c27bd45f49"
 dependencies = [
  "marked-yaml",
  "miette",
- "rattler_build_jinja",
+ "rattler_build_jinja 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rattler_build_yaml_parser"
+version = "0.1.24"
+source = "git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b#8e1623781dc656bb230ad668c693217c47c15d2b"
+dependencies = [
+ "marked-yaml",
+ "miette",
+ "rattler_build_jinja 0.1.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -7527,15 +7789,6 @@ dependencies = [
 
 [[package]]
 name = "spdx"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e17e880bafaeb362a7b751ec46bdc5b61445a188f80e0606e68167cd540fa3"
-dependencies = [
- "smallvec",
-]
-
-[[package]]
-name = "spdx"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "646c5a367da914e3babcb9cd8e91c37ccaac42325b8f86f036513ad103f2a716"
@@ -8448,8 +8701,9 @@ dependencies = [
  "miette",
  "minijinja 2.24.0",
  "pixi-build-ros",
- "rattler_build_recipe",
- "rattler_build_variant_config",
+ "rattler_build_core 0.2.24 (git+https://github.com/Tobias-Fischer/rattler-build.git?rev=8e1623781dc656bb230ad668c693217c47c15d2b)",
+ "rattler_build_recipe 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rattler_build_variant_config 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "rattler_conda_types",
  "rattler_repodata_gateway",
  "rattler_solve",
@@ -8460,7 +8714,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "spdx 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
