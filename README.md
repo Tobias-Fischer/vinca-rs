@@ -38,7 +38,7 @@ vinca-rs requirements --platform linux-64
 echo '{"recipe": "fake/recipe.yaml"}' | vinca-rs solve --platform linux-64 -c conda-forge
 ```
 
-As a conda package: `pixi add -c https://prefix.dev/robostack-tools vinca-rs` (every
+As a conda package: `pixi add -c https://prefix.dev/tobias-fischer/robostack-tools vinca-rs` (every
 release is published there), `pixi build`, or a source dependency of another pixi workspace.
 
 ## Configuration

@@ -1,5 +1,5 @@
 # The vinca-rs conda package of every platform RoboStack builds for, for a v* tag
-# uploaded to the prefix.dev channel robostack-tools (trusted publishing) and attached
+# uploaded to the prefix.dev channel tobias-fischer/robostack-tools (trusted publishing) and attached
 # to a GitHub release: RoboStack installs it instead of compiling vinca-rs in CI.
 name: Release
 on:
@@ -50,7 +50,7 @@ jobs:
         with:
           pixi-version: v0.83.0
           run-install: false
-      - run: pixi exec rattler-build upload prefix --channel robostack-tools --skip-existing --generate-attestation dist/*.conda
+      - run: pixi exec rattler-build upload prefix --channel tobias-fischer/robostack-tools --skip-existing --generate-attestation dist/*.conda
   release:
     needs: [build, publish]  # no release whose packages aren't on the channel
     if: startsWith(github.ref, 'refs/tags/')
