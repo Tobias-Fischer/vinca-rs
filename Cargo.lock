@@ -8439,7 +8439,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vinca-rs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -8451,6 +8451,8 @@ dependencies = [
  "rattler_build_variant_config",
  "rattler_conda_types",
  "rattler_repodata_gateway",
+ "rattler_solve",
+ "rattler_virtual_packages",
  "rayon",
  "reqwest 0.12.28",
  "roxmltree",

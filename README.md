@@ -32,6 +32,10 @@ vinca-rs snapshot --distro jazzy --rosdistro-ref jazzy/2026-10-05
 
 # every selected package's requirements, as JSON (for dependency/pinning tools)
 vinca-rs requirements --platform linux-64
+
+# solve recipes' host environments, one JSON request per line on stdin, with the
+# repodata kept in memory (RoboStack's check-deps: 161 s -> 30 s for humble)
+echo '{"recipe": "fake/recipe.yaml"}' | vinca-rs solve --platform linux-64 -c conda-forge
 ```
 
 As a conda package: `pixi build`, or a source dependency of another pixi workspace.

@@ -9,6 +9,7 @@ mod recipe;
 mod selectors;
 mod skip_existing;
 mod snapshot;
+mod solve;
 mod workflow;
 
 use std::collections::{BTreeMap, HashSet};
@@ -108,6 +109,18 @@ enum Command {
         target: Target,
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Solve recipes' host environments, one JSON request per stdin line
+    /// (`{"recipe": path, "glibc": optional}`), with the repodata kept in memory:
+    /// `{"ok", "text"}` per line, as `rattler-build --render-only --with-solve` decides
+    Solve {
+        #[arg(long)]
+        platform: String,
+        /// channels, as rattler-build's -c
+        #[arg(long = "channel", short = 'c', required = true)]
+        channels: Vec<String>,
+        #[arg(long, default_value = "conda_build_config.yaml")]
+        variant_config: PathBuf,
     },
 }
 
@@ -257,5 +270,8 @@ fn main() -> Result<()> {
             }
         }
         Command::Requirements { target, out } => requirements_cmd(target, out),
+        Command::Solve { platform, channels, variant_config } => {
+            solve::serve(&platform, &channels, variant_config)
+        }
     }
 }
