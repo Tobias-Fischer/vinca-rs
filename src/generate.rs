@@ -483,7 +483,8 @@ impl<'a> Generator<'a> {
                     list.spec(self.normalize(a));
                 }
                 for r in remove.iter().filter_map(|v| v.as_str()) {
-                    list.remove(&self.normalize(r));
+                    let spec = self.normalize(r);
+                    list.remove(spec.split_whitespace().next().unwrap_or_default());
                 }
             }
         }
@@ -553,8 +554,8 @@ impl<'a> Generator<'a> {
     fn apply_rules(&self, build: &mut Reqs, host: &mut Reqs, run: &mut Reqs) {
         let emscripten = self.emscripten();
         // cmake is a build tool, never a host or (on Emscripten) run dependency
-        if host.remove("cmake") {
-            build.spec("cmake");
+        for spec in host.remove("cmake") {
+            build.spec(spec);
         }
         if emscripten {
             run.remove("cmake");
@@ -564,8 +565,8 @@ impl<'a> Generator<'a> {
         let had = host.remove(&mimick);
         if emscripten {
             build.remove(&mimick);
-        } else if had {
-            build.spec(mimick);
+        } else {
+            build.extend(had);
         }
         // Emscripten resolves the generators out of `build`
         let gens = self.conda_name("rosidl_default_generators");
@@ -582,9 +583,9 @@ impl<'a> Generator<'a> {
         }
         // build-machine tools: host when native, build when cross-compiling
         for d in ["pyqt-builder", "git", "doxygen", "git-lfs"] {
-            if host.remove(d) {
-                host.push(Req::native(d));
-                build.push(Req::cross(d));
+            for spec in host.remove(d) {
+                host.push(Req::native(spec.clone()));
+                build.push(Req::cross(spec));
             }
         }
     }

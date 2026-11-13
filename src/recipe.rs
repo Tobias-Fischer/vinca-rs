@@ -75,8 +75,27 @@ impl Reqs {
     pub fn contains(&self, s: &str) -> bool {
         self.0.contains(&Req::Spec(s.to_string()))
     }
-    pub fn remove(&mut self, s: &str) -> bool {
-        self.0.shift_remove(&Req::Spec(s.to_string()))
+    /// Remove the requirements on package `name` (a spec's first word), also
+    /// inside conditional requirements; the removed specs.
+    pub fn remove(&mut self, name: &str) -> Vec<String> {
+        let is = |s: &String| s.split_whitespace().next() == Some(name);
+        let mut removed = vec![];
+        self.0 = std::mem::take(&mut self.0)
+            .into_iter()
+            .filter_map(|r| match r {
+                Req::Spec(s) if is(&s) => {
+                    removed.push(s);
+                    None
+                }
+                Req::If { cond, then } => {
+                    let (gone, keep): (Vec<String>, Vec<String>) = then.into_iter().partition(is);
+                    removed.extend(gone);
+                    (!keep.is_empty()).then_some(Req::If { cond, then: keep })
+                }
+                r => Some(r),
+            })
+            .collect();
+        removed
     }
     pub fn sorted(mut self) -> Self {
         self.0.sort_by_key(Req::sort_key);
@@ -285,5 +304,38 @@ impl RecipeDir {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reqs(r: Vec<Req>) -> Reqs {
+        let mut out = Reqs::default();
+        r.into_iter().for_each(|r| out.push(r));
+        out
+    }
+
+    #[test]
+    fn remove_by_package_name() {
+        let mut r = reqs(vec![
+            Req::Spec("foo >=1".into()),
+            Req::Spec("foo-bar".into()),
+            Req::native("foo"),
+            Req::If { cond: BuildPlatform::Cross, then: vec!["foo 2.*".into(), "baz".into()] },
+        ]);
+        assert_eq!(r.remove("foo"), ["foo >=1", "foo", "foo 2.*"]);
+        assert_eq!(r.0.into_iter().collect::<Vec<_>>(), [Req::Spec("foo-bar".into()), Req::cross("baz")]);
+    }
+
+    #[test]
+    fn dedup_sort_and_replace() {
+        let mut r = reqs(vec![Req::Spec("b".into()), Req::cross("python"), Req::Spec("a".into())]);
+        r.spec("b");
+        assert!(r.contains("a") && !r.contains("python"));
+        r.replace("python", "python 3.12.*");
+        let sorted: Vec<Req> = r.sorted().0.into_iter().collect();
+        assert_eq!(sorted, [Req::Spec("a".into()), Req::Spec("b".into()), Req::cross("python 3.12.*")]);
     }
 }
