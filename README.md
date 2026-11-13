@@ -102,6 +102,24 @@ Not ported: ROS 1, GitLab/Azure pipelines, `vinca-migrate`, `variants_mode: loca
 `skip_testing`, single-file recipes, archive and GitLab sources, remote `conda_index`,
 `-n` (skip-existing compares exact build strings).
 
+## Performance
+
+RoboStack's humble (2531 recipes on linux-64), against vinca 74d1e85, on an Apple M5
+(10 cores), with [hyperfine](https://github.com/sharkdp/hyperfine). Every command does
+its real work, network included (rosdistro cache, package.xml files, repodata), as
+in CI. `benchmarks/run.sh <robostack checkout>` reproduces it; the tables are in
+`benchmarks/results/`.
+
+| task | vinca | vinca-rs | |
+|---|---:|---:|---:|
+| generate every recipe (`vinca -m`) | 40.1 s ± 21.9 | 2.0 s ± 0.04 | **20x** |
+| generate, skipping published builds (`skip_existing`) | 31.8 s ± 4.3 | 8.7 s ± 4.4 | **3.7x** |
+| plan the full-rebuild workflow (`vinca-gha`) | 8.1 s ± 0.1 | 0.35 s ± 0.04 | **23x** |
+| snapshot rosdistro at a sync tag (`vinca-snapshot`) | 3.4 min ± 1.4 | 0.2 min ± 0.2 | **21x** |
+
+Skip-existing is dominated by downloading the channel's repodata and rendering every
+recipe with rattler-build's crates (in parallel).
+
 ## Development
 
 ```bash
