@@ -7,11 +7,12 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
+use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
 use pixi_build_ros::package_xml::{Dependency, PackageXml};
 use serde_yaml::Value;
 use thiserror::Error;
 
-use crate::config::{self, Config, PackageNameMode, PlatformList};
+use crate::config::{self, Config, PackageNameMode};
 use crate::distro::{self, Distro};
 use crate::license::to_spdx;
 use crate::recipe::*;
@@ -19,8 +20,9 @@ use crate::selectors::evaluate_distro;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error("conda_index entry {0} has no robostack mapping")]
-    NoRobostackMapping(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageMap(#[from] PackageMapError),
     #[error(transparent)]
     #[diagnostic(transparent)]
     Distro(#[from] distro::Error),
@@ -150,8 +152,7 @@ fn names(deps: &[&Vec<Dependency>]) -> Vec<String> {
 
 impl<'a> Generator<'a> {
     pub fn new(conf: &'a Config, distro: &'a Distro) -> Self {
-        let shadowed =
-            conf.conda_indexes.iter().flat_map(|i| i.keys()).filter(|n| distro.has(n)).cloned().collect();
+        let shadowed = conf.package_map.keys().filter(|n| distro.has(n)).cloned().collect();
         Self { conf, distro, unsatisfied: BTreeSet::new(), shadowed }
     }
 
@@ -197,32 +198,19 @@ impl<'a> Generator<'a> {
 
     /// A rosdep key or ROS package -> conda specs.
     fn resolve(&mut self, dep: &str, kind: DepKind) -> Result<Vec<String>> {
-        for index in &self.conf.conda_indexes {
-            let Some(entry) = index.get(dep) else {
-                continue;
-            };
-            let specs = match &entry.robostack {
-                None => return Err(Error::NoRobostackMapping(dep.into())),
-                Some(PlatformList::All(l)) => l.clone(),
-                Some(PlatformList::PerPlatform(m)) => m
-                    .get(self.conf.platform.as_str())
-                    .or_else(|| match self.conf.platform.only_platform() {
-                        Some("win") => m.get("win64"),
-                        Some(os @ ("linux" | "osx" | "emscripten")) => m.get(os),
-                        _ => None,
-                    })
-                    .cloned()
-                    .flatten()
-                    .unwrap_or_default(),
-            };
-            if kind == DepKind::Build {
-                return Ok(specs);
+        match lookup(&self.conf.package_map, dep, self.conf.platform)? {
+            Some(MappedPackages::Conda(specs)) if kind == DepKind::Build => return Ok(specs),
+            Some(MappedPackages::Conda(specs)) => {
+                return Ok(specs
+                    .into_iter()
+                    .map(|s| if s.contains("${{") { s } else { s.split(' ').next().unwrap().to_string() })
+                    .filter(|s| s != "python")
+                    .collect());
             }
-            return Ok(specs
-                .into_iter()
-                .map(|s| if s.contains("${{") { s } else { s.split(' ').next().unwrap().to_string() })
-                .filter(|s| s != "python")
-                .collect());
+            Some(MappedPackages::Ros(names)) => {
+                return Ok(names.iter().map(|n| self.conda_name(n)).collect());
+            }
+            None => {}
         }
         let excluded = self.conf.packages_exclude.iter().any(|e| e == dep || *e == dep.replace('_', "-"));
         if !self.distro.has(dep) || excluded {

@@ -19,7 +19,8 @@ indexmap = { version = "2", features = ["serde"] }
 miette = { version = "7", features = ["fancy"] }
 minijinja = "2"
 # package.xml parsing (REP 149 conditions)
-pixi-build-ros = { git = "https://github.com/prefix-dev/pixi.git", rev = "49fbd301e8d09949fcfc42a75a1419e13a87ce08" }
+# the shared rosdep lookup: Tobias-Fischer/pixi pixi-build-ros-shared-map, until it is merged
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "722efca22d07593b4d2a66ea5f0865aa5735d7dd" }
 rattler_build_recipe = "0.1.24"
 rattler_build_variant_config = "0.1.24"
 rattler_conda_types = { version = "0.58", default-features = false }
