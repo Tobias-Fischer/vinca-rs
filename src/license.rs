@@ -64,10 +64,12 @@ const LOOKUP: &[(&str, &str)] = &[
     ("cc by-nc-sa 4.0", "CC-BY-NC-SA-4.0"),
     ("cc0", "CC0-1.0"),
     ("creative commons zero v1.0 universal", "CC0-1.0"),
+    // spellchecker:off
     (
         "creative commons attribution-noncommercial-noderivatives 4.0 international public license",
         "CC-BY-NC-ND-4.0",
     ),
+    // spellchecker:on
     ("creative commons", "CC0-1.0"),
     ("public domain", "Unlicense"),
 ];

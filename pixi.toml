@@ -4,6 +4,13 @@ channels = ["https://prefix.dev/conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
 preview = ["pixi-build"]
 
+# RoboStack's tooling environment supports glibc 2.17 (CentOS 7)
+[workspace.target.linux-64.build-variants]
+c_stdlib_version = ["2.17"]
+
+[workspace.target.linux-aarch64.build-variants]
+c_stdlib_version = ["2.17"]
+
 # vinca-rs as a conda package: `pixi build`, or as a source dependency of another
 # workspace (e.g. RoboStack's): vinca-rs = { git = "https://github.com/Tobias-Fischer/vinca-rs" }
 [package]
@@ -26,17 +33,17 @@ rust = ">=1.97"
 
 # development
 [dependencies]
+c-compiler = "*"
+cargo-insta = ">=1.49"
 rust = ">=1.97"
+tombi = ">=1.9.7,<2"
+typos = ">=1.39"
 
 [tasks]
 build = "cargo build --release"
 test = "cargo test"
 fmt = "cargo fmt"
 lint = { cmd = "cargo clippy --all-targets -- -D warnings", depends-on = ["fmt"] }
-
-# RoboStack's tooling environment supports glibc 2.17 (CentOS 7)
-[workspace.target.linux-64.build-variants]
-c_stdlib_version = ["2.17"]
-
-[workspace.target.linux-aarch64.build-variants]
-c_stdlib_version = ["2.17"]
+toml-format = "tombi format"
+toml-lint = "tombi lint"
+typos = "typos --force-exclude"

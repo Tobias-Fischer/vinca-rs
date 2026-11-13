@@ -132,6 +132,9 @@ strings.
 ## Development
 
 ```bash
-cargo test
-cargo clippy --all-targets -- -D warnings
+pixi run test
+pixi run lint
+pixi run typos
+pixi run toml-format
+pixi run toml-lint
 ```

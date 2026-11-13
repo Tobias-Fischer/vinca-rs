@@ -525,8 +525,10 @@ mod tests {
     fn replacing_a_release_needs_a_reason() {
         let snapshot = IndexMap::from([("pkg".to_string(), entry("1.7.2", None))]);
         let silent = IndexMap::from([("pkg".to_string(), entry("1.4.2", None))]);
-        let err = check_overrides(&snapshot, &silent).unwrap_err().to_string();
-        assert!(err.contains("pkg: released 1.7.2") && err.contains("the release is newer"), "{err}");
+        insta::assert_snapshot!(check_overrides(&snapshot, &silent).unwrap_err(), @"
+        rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:
+          pkg: released 1.7.2 (https://github.com/x/y.git), additional recipe 1.4.2 (https://github.com/x/y.git) -- the release is newer
+        ");
         let explained = IndexMap::from([("pkg".to_string(), entry("1.4.2", Some("fork with a fix")))]);
         check_overrides(&snapshot, &explained).unwrap();
         let other = IndexMap::from([("new_pkg".to_string(), entry("1.0.0", None))]);
