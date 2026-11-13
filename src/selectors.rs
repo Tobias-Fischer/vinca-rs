@@ -92,9 +92,12 @@ pub fn process(node: &Value, cond: &dyn Fn(&str) -> Option<Result<bool>>) -> Res
         Value::Sequence(seq) => {
             let mut out = Vec::new();
             for item in seq {
+                // a selector's list is spliced into the list it is in; a list is not
+                let selector =
+                    matches!(item, Value::Mapping(m) if m.contains_key("if") && m.contains_key("then"));
                 match process(item, cond)? {
                     None => {}
-                    Some(Value::Sequence(inner)) => out.extend(inner),
+                    Some(Value::Sequence(inner)) if selector => out.extend(inner),
                     Some(v) => out.push(v),
                 }
             }
@@ -109,10 +112,11 @@ pub fn evaluate_for_platform(data: &Value, platform: &str) -> Result<Value> {
     Ok(process(data, &|e| Some(eval(e, &ctx)))?.unwrap_or(Value::Null))
 }
 
-/// Only the selectors that mention `ros_distro` (test files shared by distros);
-/// the platform ones are left for rattler-build.
-pub fn evaluate_distro(data: &Value, ros_distro: &str) -> Result<Value> {
-    let mut ctx = BTreeMap::new();
+/// Only the selectors that mention `ros_distro` (test files shared by distros),
+/// with the platform's names too (`linux and ros_distro == "humble"`): the
+/// recipes are generated per platform. The others are left for rattler-build.
+pub fn evaluate_distro(data: &Value, ros_distro: &str, platform: &str) -> Result<Value> {
+    let mut ctx = platform_flags(platform);
     ctx.insert("ros_distro".to_string(), JValue::from(ros_distro));
     Ok(process(data, &|e| e.contains("ros_distro").then(|| eval(e, &ctx)))?.unwrap_or(Value::Null))
 }
@@ -133,6 +137,10 @@ mod tests {
         let osx = evaluate_for_platform(&v, "osx-arm64").unwrap();
         assert_eq!(osx["key"], Value::from("x"));
         assert!(eval("aarch64 and unix", &platform_flags("osx-arm64")).unwrap());
+        // a nested list stays one
+        let nested: Value = serde_yaml::from_str("[[a, b], {if: linux, then: [[c]]}]").unwrap();
+        let out = evaluate_for_platform(&nested, "linux-64").unwrap();
+        assert_eq!(out, serde_yaml::from_str::<Value>("[[a, b], [c]]").unwrap());
     }
 
     #[test]
@@ -148,11 +156,15 @@ mod tests {
 
     #[test]
     fn distro_selectors_leave_platform_ones() {
-        let v: Value =
-            serde_yaml::from_str("[{if: 'ros_distro == \"humble\"', then: h}, {if: linux, then: l}]")
-                .unwrap();
-        let out = evaluate_distro(&v, "humble").unwrap();
+        let v: Value = serde_yaml::from_str(
+            "[{if: 'ros_distro == \"humble\"', then: h}, {if: linux, then: l}, \
+             {if: 'osx and ros_distro == \"humble\"', then: o, else: n}]",
+        )
+        .unwrap();
+        let out = evaluate_distro(&v, "humble", "linux-64").unwrap();
         assert_eq!(out[0], Value::from("h"));
         assert!(out[1].get("if").is_some());
+        assert_eq!(out[2], Value::from("n"));
+        assert_eq!(evaluate_distro(&v, "humble", "osx-arm64").unwrap()[2], Value::from("o"));
     }
 }

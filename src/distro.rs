@@ -243,11 +243,19 @@ impl Rosdistro {
         text(client, &Distro::raw_url(&entry)?)
     }
 
+    /// The variables package.xml conditions (REP 149) see, so that the recipes
+    /// don't depend on the caller's shell: the distribution's ROS_DISTRO,
+    /// ROS_VERSION and ROS_PYTHON_VERSION; CONDA_PREFIX set and HOMEBREW_PREFIX not,
+    /// as the packages are built with conda (e.g. the Gazebo vendor packages then
+    /// use conda's libraries, as they did when vinca ran in a pixi environment).
+    /// Every other variable is unset, i.e. `''` in a condition.
     pub fn condition_env(&self, name: &str) -> HashMap<String, String> {
-        let mut env: HashMap<String, String> = std::env::vars().collect();
+        let mut env = HashMap::new();
         env.insert("ROS_DISTRO".into(), name.into());
         env.insert("ROS_VERSION".into(), if self.ros1 { "1" } else { "2" }.into());
         env.insert("ROS_PYTHON_VERSION".into(), self.python_version.to_string());
+        // any non-empty value: conditions only compare it with ''
+        env.insert("CONDA_PREFIX".into(), "conda".into());
         env
     }
 }
@@ -274,15 +282,24 @@ fn parse<T: for<'de> Deserialize<'de>>(text: &str, what: &str) -> Result<T> {
     serde_yaml::from_str(text).map_err(|source| Error::Parse { what: what.into(), source })
 }
 
-fn text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
+pub fn text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
     get(client, url)?.text().map_err(|source| Error::Fetch { url: url.into(), source })
+}
+
+/// Whether GITHUB_TOKEN goes with a request to `url`: only to GitHub's own hosts,
+/// over https.
+fn is_github(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && matches!(u.host_str(), Some("github.com" | "api.github.com" | "raw.githubusercontent.com"))
+    })
 }
 
 fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blocking::Response> {
     let mut last = None;
     for attempt in 0..5 {
         let mut req = client.get(url);
-        if url.contains("github")
+        if is_github(url)
             && let Ok(token) = std::env::var("GITHUB_TOKEN")
         {
             req = req.header("Authorization", format!("token {token}"));
@@ -304,7 +321,12 @@ impl Distro {
     pub fn load(conf: &Config) -> Result<Self> {
         let client = client()?;
         let rd = Rosdistro::load(&client, &conf.ros_distro, None)?;
-        Ok(Self {
+        Ok(Self::new(conf, rd, client))
+    }
+
+    /// From an already loaded rosdistro (e.g. a test's, without network).
+    pub fn new(conf: &Config, rd: Rosdistro, client: reqwest::blocking::Client) -> Self {
+        Self {
             name: conf.ros_distro.clone(),
             ros1: rd.ros1,
             condition_env: rd.condition_env(&conf.ros_distro),
@@ -314,7 +336,7 @@ impl Distro {
             live: rd.releases,
             fetched: Mutex::new(HashMap::new()),
             client,
-        })
+        }
     }
 
     pub fn entry(&self, pkg: &str) -> Option<&SnapshotEntry> {
@@ -479,5 +501,20 @@ impl Distro {
 
     pub fn package(&self, pkg: &str) -> Result<PackageXml> {
         parse_package(&self.package_xml(pkg)?, pkg, &self.condition_env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_only_for_github_hosts() {
+        assert!(is_github("https://raw.githubusercontent.com/ros/rosdistro/master/index-v4.yaml"));
+        assert!(is_github("https://api.github.com/repos/x/y"));
+        assert!(!is_github("https://github.com.evil.example/x"));
+        assert!(!is_github("https://example.com/github/x"));
+        assert!(!is_github("http://github.com/x"));
+        assert!(!is_github("https://repo.ros2.org/rosdistro_cache/humble-cache.yaml.gz"));
     }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>demo_cpp</name>
+  <version>1.2.3</version>
+  <description>A C++ demo package.</description>
+  <maintainer email="m@example.com">M</maintainer>
+  <license>LGPL-2.0 OR GPL-2.0</license>
+  <url type="website">https://example.com/demo</url>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>git</buildtool_depend>
+  <depend>libfoo</depend>
+  <depend condition="$ROS_VERSION == 2">eigen</depend>
+  <!-- not in a conda build (REP 149, as the Gazebo vendor packages) -->
+  <build_depend condition="($CONDA_PREFIX == '') and ($HOMEBREW_PREFIX == '')">vendored_eigen</build_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

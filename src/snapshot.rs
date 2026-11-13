@@ -142,10 +142,7 @@ pub fn fill_dependencies(distro: &str, path: &Path) -> Result<()> {
         .into_par_iter()
         .map(|(pkg, entry)| {
             let deps = (|| {
-                let url = Distro::raw_url(&entry)?;
-                let fetch = |source| distro::Error::Fetch { url: url.clone(), source };
-                let xml =
-                    client.get(&url).send().and_then(|r| r.error_for_status()?.text()).map_err(fetch)?;
+                let xml = distro::text(&client, &Distro::raw_url(&entry)?)?;
                 Ok(direct_depends(&parse_package(&xml, &pkg, &env)?, released).into_iter().collect())
             })();
             (pkg, deps)

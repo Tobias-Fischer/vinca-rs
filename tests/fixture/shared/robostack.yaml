@@ -1,0 +1,11 @@
+cmake: {robostack: [cmake]}
+eigen: {robostack: [eigen]}
+git: {robostack: [git]}
+libfoo:
+  robostack:
+    linux: ["libfoo-linux >=1.0"]
+    win64: [libfoo-win]
+python: {robostack: [python]}
+python3: {robostack: [python]}
+python3-numpy: {robostack: [numpy]}
+python-setuptools: {robostack: [setuptools]}

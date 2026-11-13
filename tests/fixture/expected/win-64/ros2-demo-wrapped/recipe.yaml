@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json
+
+package:
+  name: ros2-demo-wrapped
+  version: 2.1.0
+build:
+  number: 3
+  script: ''
+requirements:
+  run:
+  - libwrapped >=2.1.0, <2.2.0a0
+  - ros2-distro-mutex 0.7.* humble_*
+about:
+  license: MIT
+  summary: A ROS package of a library conda-forge has.
+extra:
+  recipe-maintainers:
+  - ros-forge

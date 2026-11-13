@@ -2,15 +2,18 @@
 //!
 //! vinca-rs only decides *what* each job builds and which jobs it waits for; *how* a
 //! job builds is the caller's: a workflow template whose `jobs.build` is copied once
-//! per job. In each copy `@recipes@` becomes the job's recipes, and vinca-rs sets the
-//! job's `name` and `needs`. Every other `@name@` in the template is a `--var`, and
-//! `if`/`then`/`else` selectors are resolved for the target platform.
+//! per job, in its place (the template's other jobs stay as they are). In each copy
+//! `@recipes@` becomes the job's recipes, and vinca-rs sets the job's `name` and adds
+//! the jobs it waits for to the template's `needs`. Every other `@name@` in the
+//! template's string values is a `--var`, and `if`/`then`/`else` selectors are
+//! resolved for the target platform.
 //!
 //! Each job needs exactly the jobs that build its recipes' dependencies, not a
 //! whole previous stage: a job starts as soon as its own dependencies are built, and
 //! a failure only skips the recipes that depend on it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -61,7 +64,7 @@ pub struct Timings {
     pub recipes: HashMap<String, f64>,
     pub default: Option<f64>,
     pub job_overhead: Option<f64>,
-    pub runners: Option<usize>,
+    pub runners: Option<NonZeroUsize>,
 }
 
 pub struct Options {
@@ -458,32 +461,49 @@ fn job_name(job: &[String]) -> String {
 }
 
 fn render(template: &Value, jobs: &[Vec<String>], needs: &[BTreeSet<usize>]) -> Result<String> {
-    let mut wf = template.clone();
-    let job_tpl = wf["jobs"]["build"].clone();
-    if !job_tpl.is_mapping() {
-        return Err(Error::NoBuildJob);
-    }
+    let tpl_jobs = template["jobs"].as_mapping().ok_or(Error::NoBuildJob)?;
+    let job_tpl = tpl_jobs.get("build").filter(|j| j.is_mapping()).ok_or(Error::NoBuildJob)?;
+    // the template's own needs (e.g. a set-up job of the template) come first
+    let own_needs = match job_tpl.get("needs") {
+        Some(Value::Sequence(s)) => s.clone(),
+        Some(v) => vec![v.clone()],
+        None => vec![],
+    };
     let mut out = Mapping::new();
-    for (i, job) in jobs.iter().enumerate() {
-        let mut j = job_tpl.clone();
-        substitute(&mut j, "@recipes@", &job.join(" "));
-        // name and needs first, then the template's keys
-        let mut m = Mapping::new();
-        m.insert("name".into(), job_name(job).into());
-        if !needs[i].is_empty() {
-            let needs: Vec<Value> = needs[i].iter().map(|n| format!("job_{n}").into()).collect();
-            m.insert("needs".into(), Value::Sequence(needs));
+    for (key, tpl_job) in tpl_jobs {
+        if key.as_str() != Some("build") {
+            out.insert(key.clone(), tpl_job.clone());
+            continue;
         }
-        for (k, v) in j.as_mapping().unwrap() {
-            if !m.contains_key(k) {
-                m.insert(k.clone(), v.clone());
+        for (i, job) in jobs.iter().enumerate() {
+            let mut j = job_tpl.clone();
+            substitute(&mut j, "@recipes@", &job.join(" "));
+            // name and needs first, then the template's keys
+            let mut m = Mapping::new();
+            m.insert("name".into(), job_name(job).into());
+            let needs: Vec<Value> =
+                own_needs.iter().cloned().chain(needs[i].iter().map(|n| format!("job_{n}").into())).collect();
+            if !needs.is_empty() {
+                m.insert("needs".into(), Value::Sequence(needs));
             }
+            for (k, v) in j.as_mapping().unwrap() {
+                if !m.contains_key(k) {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+            out.insert(format!("job_{i}").into(), Value::Mapping(m));
         }
-        out.insert(format!("job_{i}").into(), Value::Mapping(m));
     }
+    let mut wf = template.clone();
     wf["jobs"] = Value::Mapping(out);
-    // YAML 1.1 readers (GitHub's included) take a plain `on` for `true` and back
-    Ok(serde_yaml::to_string(&wf)?.replace("'on':", "on:"))
+    // YAML 1.1 readers (GitHub's included) take a plain `on` for `true` and back;
+    // only the top-level key (unindented) is the workflow's `on`
+    let yaml = serde_yaml::to_string(&wf)?;
+    Ok(yaml
+        .lines()
+        .map(|l| l.strip_prefix("'on':").map_or_else(|| l.to_string(), |rest| format!("on:{rest}")))
+        .map(|l| l + "\n")
+        .collect())
 }
 
 /// Write the outputs for the recipes; false when there is nothing to build.
@@ -494,12 +514,13 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
     }
     let template = match &opts.template {
         Some((t, _)) => {
-            let mut text = fs::read_to_string(t)?.replace("@platform@", opts.platform.as_str());
+            let mut tpl = serde_yaml::from_str(&fs::read_to_string(t)?)
+                .map_err(|source| Error::Parse { path: t.clone(), source })?;
+            // in the parsed string values: a value can't change the YAML's structure
+            substitute(&mut tpl, "@platform@", opts.platform.as_str());
             for (k, v) in &opts.vars {
-                text = text.replace(&format!("@{k}@"), v);
+                substitute(&mut tpl, &format!("@{k}@"), v);
             }
-            let tpl =
-                serde_yaml::from_str(&text).map_err(|source| Error::Parse { path: t.clone(), source })?;
             Some(
                 evaluate_for_platform(&tpl, opts.platform.as_str())
                     .map_err(|source| Error::Selector { path: t.clone(), source })?,
@@ -514,7 +535,7 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
         t: &opts.timings,
         default: opts.timings.default.or(known.get(known.len() / 2).copied()).unwrap_or(20.0),
         overhead: opts.timings.job_overhead.unwrap_or(30.0),
-        runners: opts.timings.runners.unwrap_or(if opts.platform.is_osx() { 5 } else { 20 }),
+        runners: opts.timings.runners.map_or(if opts.platform.is_osx() { 5 } else { 20 }, NonZeroUsize::get),
     };
     // the schedule that finishes first on the runners (and fits GitHub's size
     // limit): more slack, fewer and fuller jobs
@@ -690,6 +711,37 @@ mod tests {
         assert!(wf["jobs"]["job_1"].get("needs").is_none());
         assert_eq!(wf["jobs"]["job_0"]["steps"][0]["run"], "build a b");
         assert!(yaml.starts_with("on:"));
+    }
+
+    #[test]
+    fn template_jobs_and_needs_are_kept() {
+        let recipes = recipes(&[("a", &[], false), ("b", &["a"], false)]);
+        let jobs = vec![vec!["a".to_string()], vec!["b".to_string()]];
+        let tpl: Value = serde_yaml::from_str(
+            "on: push\njobs:\n  setup: {steps: [{run: 'on: x'}]}\n  build:\n    needs: setup\n    steps: [{run: '@recipes@'}]\n  report: {needs: setup}",
+        )
+        .unwrap();
+        let wf: Value =
+            serde_yaml::from_str(&render(&tpl, &jobs, &job_needs(&jobs, &recipes)).unwrap()).unwrap();
+        let names: Vec<_> = wf["jobs"].as_mapping().unwrap().keys().filter_map(Value::as_str).collect();
+        assert_eq!(names, ["setup", "job_0", "job_1", "report"]);
+        assert_eq!(wf["jobs"]["job_0"]["needs"], serde_yaml::from_str::<Value>("[setup]").unwrap());
+        assert_eq!(wf["jobs"]["job_1"]["needs"], serde_yaml::from_str::<Value>("[setup, job_0]").unwrap());
+        assert_eq!(wf["jobs"]["setup"]["steps"][0]["run"], "on: x");
+        assert!(wf.get("on").is_some());
+    }
+
+    #[test]
+    fn simulate_waits_for_needs_and_runners() {
+        let jobs: Vec<Vec<String>> = [["a"], ["b"], ["c"]].iter().map(|j| vec![j[0].to_string()]).collect();
+        let t = timings(&[("a", 100.0), ("b", 50.0), ("c", 10.0)]);
+        // c needs a; a and b run at once
+        let needs = vec![BTreeSet::new(), BTreeSet::new(), BTreeSet::from([0])];
+        let clock = Clock { t: &t, default: 0.0, overhead: 0.0, runners: 2 };
+        assert_eq!(simulate(&jobs, &job_stages(&needs), &needs, &clock, false), 110.0);
+        // one runner: one job after the other
+        let clock = Clock { runners: 1, ..clock };
+        assert_eq!(simulate(&jobs, &job_stages(&needs), &needs, &clock, false), 160.0);
     }
 
     #[test]
