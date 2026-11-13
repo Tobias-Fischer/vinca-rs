@@ -104,8 +104,12 @@ fn normalize(s: &str) -> Option<String> {
     for req in expr.requirements() {
         if let spdx::LicenseItem::Spdx { id, or_later } = req.req.license {
             let canonical = canonical(id, or_later);
-            let span = &s[req.span.start as usize..req.span.end as usize];
-            out = out.replacen(span, &canonical, 1);
+            // the span leaves out a trailing `+` (GPL-3.0+), which `canonical` covers
+            let mut end = req.span.end as usize;
+            if or_later && s[end..].starts_with('+') {
+                end += 1;
+            }
+            out = out.replacen(&s[req.span.start as usize..end], &canonical, 1);
         } else {
             return None;
         }
@@ -161,4 +165,38 @@ pub fn to_spdx(licenses: &[String], pkg: &str) -> Option<String> {
         }
     }
     (!out.is_empty()).then(|| out.join(" OR "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_spdx;
+
+    fn spdx(l: &[&str]) -> Option<String> {
+        to_spdx(&l.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "pkg")
+    }
+
+    #[test]
+    fn lookup_names_win_over_imprecise_spdx_guesses() {
+        assert_eq!(spdx(&["BSD"]).unwrap(), "BSD-3-Clause");
+        assert_eq!(spdx(&["Apache License, Version 2.0"]).unwrap(), "Apache-2.0");
+        assert_eq!(spdx(&["GPL"]).unwrap(), "GPL-1.0-or-later");
+    }
+
+    #[test]
+    fn gnu_licenses_are_only_or_or_later() {
+        assert_eq!(spdx(&["GPL-3.0+"]).unwrap(), "GPL-3.0-or-later");
+        assert_eq!(spdx(&["LGPL-2.1+"]).unwrap(), "LGPL-2.1-or-later");
+        assert_eq!(spdx(&["GPL-2.0"]).unwrap(), "GPL-2.0-only");
+    }
+
+    #[test]
+    fn several_licenses() {
+        assert_eq!(
+            spdx(&["BSD", "Apache 2.0"]).unwrap(),
+            "BSD-3-Clause OR Apache-2.0"
+        );
+        assert_eq!(spdx(&["BSD, Apache 2.0"]).unwrap(), "BSD-3-Clause OR Apache-2.0");
+        assert_eq!(spdx(&["TODO"]), None);
+        assert_eq!(spdx(&["My Own License"]).unwrap(), "LicenseRef-My-Own-License");
+    }
 }

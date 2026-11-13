@@ -107,3 +107,35 @@ pub fn evaluate_distro(data: &Value, ros_distro: &str) -> Value {
     ctx.insert("ros_distro".to_string(), JValue::from(ros_distro));
     process(data, &|e| e.contains("ros_distro").then(|| eval(e, &ctx))).unwrap_or(Value::Null)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selectors_resolve_and_splice() {
+        let v: Value = serde_yaml::from_str(
+            "list: [a, {if: linux, then: [b, c]}, {if: win, then: d, else: e}]\nkey: {if: osx, then: x}",
+        )
+        .unwrap();
+        let linux = evaluate_for_platform(&v, "linux-aarch64");
+        assert_eq!(
+            linux["list"],
+            serde_yaml::from_str::<Value>("[a, b, c, e]").unwrap()
+        );
+        assert!(linux.get("key").is_none());
+        let osx = evaluate_for_platform(&v, "osx-arm64");
+        assert_eq!(osx["key"], Value::from("x"));
+        assert!(eval("aarch64 and unix", &platform_flags("osx-arm64")));
+    }
+
+    #[test]
+    fn distro_selectors_leave_platform_ones() {
+        let v: Value =
+            serde_yaml::from_str("[{if: 'ros_distro == \"humble\"', then: h}, {if: linux, then: l}]")
+                .unwrap();
+        let out = evaluate_distro(&v, "humble");
+        assert_eq!(out[0], Value::from("h"));
+        assert!(out[1].get("if").is_some());
+    }
+}

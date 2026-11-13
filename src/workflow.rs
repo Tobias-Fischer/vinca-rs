@@ -661,6 +661,20 @@ mod tests {
     }
 
     #[test]
+    fn json_stages_use_vinca_ids() {
+        let recipes = BTreeMap::from([
+            ("a".to_string(), r(&[], false)),
+            ("b".to_string(), r(&["a"], false)),
+        ]);
+        let jobs = vec![vec!["a".to_string()], vec!["b".to_string()]];
+        let j = stages_json(&jobs, &recipes);
+        assert_eq!(j["stages"][0][0]["id"], "stage_0_job_0");
+        assert_eq!(j["stages"][1][0]["id"], "stage_1_job_0");
+        assert_eq!(j["stages"][1][0]["needs"], serde_json::json!(["stage_0_job_0"]));
+        assert_eq!(j["stages"][1][0]["recipes"], "b");
+    }
+
+    #[test]
     fn aliases_follow_their_package() {
         let recipes = BTreeMap::from([
             ("ros2-x".to_string(), r(&[], false)),
