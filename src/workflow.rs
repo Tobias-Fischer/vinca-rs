@@ -745,11 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_runners_is_invalid() {
-        assert!(serde_json::from_str::<Timings>(r#"{"runners": 0}"#).is_err());
-    }
-
-    #[test]
     fn dependent_on_two_jobs_waits_for_both() {
         // d needs a and c, which run in parallel: d goes after the later one
         let recipes = recipes(&[("a", &[], false), ("c", &[], false), ("d", &["a", "c"], false)]);

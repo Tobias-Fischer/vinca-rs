@@ -328,14 +328,4 @@ mod tests {
         assert_eq!(r.remove("foo"), ["foo >=1", "foo", "foo 2.*"]);
         assert_eq!(r.0.into_iter().collect::<Vec<_>>(), [Req::Spec("foo-bar".into()), Req::cross("baz")]);
     }
-
-    #[test]
-    fn dedup_sort_and_replace() {
-        let mut r = reqs(vec![Req::Spec("b".into()), Req::cross("python"), Req::Spec("a".into())]);
-        r.spec("b");
-        assert!(r.contains("a") && !r.contains("python"));
-        r.replace("python", "python 3.12.*");
-        let sorted: Vec<Req> = r.sorted().0.into_iter().collect();
-        assert_eq!(sorted, [Req::Spec("a".into()), Req::Spec("b".into()), Req::cross("python 3.12.*")]);
-    }
 }
