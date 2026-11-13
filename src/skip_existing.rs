@@ -12,15 +12,13 @@ use std::str::FromStr;
 use fs_err as fs;
 use miette::Diagnostic;
 use rattler_build_recipe::{RenderConfig, variant_render::RenderError};
-use rattler_conda_types::{PackageRecord, ParseSubdirError, Subdir};
+use rattler_conda_types::{PackageRecord, Subdir};
 use rattler_repodata_gateway::GatewayError;
 use rayon::prelude::*;
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error(transparent)]
-    Platform(#[from] ParseSubdirError),
     #[error("invalid channel url {url}")]
     Channel { url: String, source: url::ParseError },
     #[error("failed to start the async runtime")]
@@ -59,14 +57,13 @@ fn built_for_distro(r: &PackageRecord, distro: &str) -> bool {
 /// pixi and rattler-build share.
 pub fn published(
     channels: &[String],
-    platform: &str,
+    subdir: Subdir,
     distro: &str,
     names: &[String],
 ) -> Result<HashSet<Build>> {
     use rattler_conda_types::{Channel, PackageName};
     use rattler_repodata_gateway::Gateway;
 
-    let subdir = Subdir::from_str(platform)?;
     let channels: Vec<Channel> = channels
         .iter()
         .map(|c| {
@@ -90,8 +87,7 @@ pub fn published(
 }
 
 /// Every output (variant) a recipe builds.
-pub fn render(recipe: &Path, platform: &str, variant_config: Option<&Path>) -> Result<Vec<Build>> {
-    let subdir = Subdir::from_str(platform)?;
+pub fn render(recipe: &Path, subdir: Subdir, variant_config: Option<&Path>) -> Result<Vec<Build>> {
     let config = RenderConfig {
         target_platform: subdir,
         build_platform: subdir,
@@ -118,7 +114,7 @@ pub fn render(recipe: &Path, platform: &str, variant_config: Option<&Path>) -> R
 /// Remove the recipe directories whose every output is published; their names.
 pub fn remove_built(
     recipes: &Path,
-    platform: &str,
+    subdir: Subdir,
     variant_config: Option<&Path>,
     published: &HashSet<Build>,
 ) -> Result<BTreeSet<String>> {
@@ -129,7 +125,7 @@ pub fn remove_built(
     let built: Vec<Result<Option<PathBuf>>> = dirs
         .into_par_iter()
         .map(|dir| {
-            let builds = render(&dir.join("recipe.yaml"), platform, variant_config)?;
+            let builds = render(&dir.join("recipe.yaml"), subdir, variant_config)?;
             Ok((!builds.is_empty() && builds.iter().all(|b| published.contains(b))).then_some(dir))
         })
         .collect();

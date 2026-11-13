@@ -11,13 +11,12 @@
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use miette::Diagnostic;
 use rattler_build_recipe::stage1::requirements::Dependency;
 use rattler_build_recipe::{RenderConfig, variant_render::RenderError};
 use rattler_conda_types::{
-    Channel, MatchSpec, NamelessMatchSpec, ParseChannelError, ParseStrictness, ParseSubdirError, Subdir,
+    Channel, MatchSpec, NamelessMatchSpec, ParseChannelError, ParseStrictness, Subdir,
 };
 use rattler_repodata_gateway::{Gateway, GatewayError};
 use rattler_solve::{ChannelPriority, SolverImpl, SolverTask, resolvo};
@@ -29,8 +28,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error(transparent)]
-    Platform(#[from] ParseSubdirError),
     #[error("invalid channel {name}")]
     Channel { name: String, source: ParseChannelError },
     #[error("failed to start the async runtime")]
@@ -141,9 +138,9 @@ impl Server {
     }
 }
 
-pub fn serve(platform: &str, channels: &[String], variant_config: PathBuf) -> Result<()> {
+pub fn serve(platform: Subdir, channels: &[String], variant_config: PathBuf) -> Result<()> {
     let server = Server {
-        platform: Subdir::from_str(platform)?,
+        platform,
         // as rattler-build's -c: a name is a channel on conda.anaconda.org
         channels: {
             let config = rattler_conda_types::ChannelConfig::default_with_root_dir(std::env::current_dir()?);

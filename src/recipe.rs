@@ -27,25 +27,31 @@ pub enum Req {
     Spec(String),
     If {
         #[serde(rename = "if")]
-        cond: String,
+        cond: BuildPlatform,
         then: Vec<String>,
     },
 }
 
-pub const CROSS: &str = "build_platform != target_platform";
-pub const NATIVE: &str = "build_platform == target_platform";
+/// Build vs target platform; `Ord` as the conditions' text sorts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub enum BuildPlatform {
+    #[serde(rename = "build_platform != target_platform")]
+    Cross,
+    #[serde(rename = "build_platform == target_platform")]
+    Native,
+}
 
 impl Req {
     pub fn cross(s: impl Into<String>) -> Self {
-        Req::If { cond: CROSS.into(), then: vec![s.into()] }
+        Req::If { cond: BuildPlatform::Cross, then: vec![s.into()] }
     }
     pub fn native(s: impl Into<String>) -> Self {
-        Req::If { cond: NATIVE.into(), then: vec![s.into()] }
+        Req::If { cond: BuildPlatform::Native, then: vec![s.into()] }
     }
-    fn sort_key(&self) -> (u8, String) {
+    fn sort_key(&self) -> (Option<BuildPlatform>, String) {
         match self {
-            Req::Spec(s) => (0, s.clone()),
-            Req::If { cond, then } => (1, format!("{cond}{}", then.join(","))),
+            Req::Spec(s) => (None, s.clone()),
+            Req::If { cond, then } => (Some(*cond), then.join(",")),
         }
     }
 }

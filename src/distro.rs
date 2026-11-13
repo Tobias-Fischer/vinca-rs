@@ -252,6 +252,11 @@ impl Rosdistro {
     }
 }
 
+enum XmlSource<'a> {
+    Cached(&'a String),
+    Url(String),
+}
+
 pub struct Distro {
     pub name: String,
     pub ros1: bool,
@@ -420,10 +425,14 @@ impl Distro {
 
     /// Where the package.xml of `pkg` comes from: the cache when its release
     /// matches the snapshot, else the pinned tag/rev.
-    fn xml_source(&self, pkg: &str) -> Result<Result<&String, String>> {
+    fn xml_source(&self, pkg: &str) -> Result<XmlSource<'_>> {
         let entry = self.entry(pkg).or_else(|| self.additional.get(pkg));
         let Some(e) = entry else {
-            return self.cache_xmls.get(pkg).map(Ok).ok_or_else(|| Error::NoPackageXml(pkg.into()));
+            return self
+                .cache_xmls
+                .get(pkg)
+                .map(XmlSource::Cached)
+                .ok_or_else(|| Error::NoPackageXml(pkg.into()));
         };
         let matches = [pkg.to_string(), pkg.replace('_', "-")].iter().any(|n| {
             self.live
@@ -433,15 +442,20 @@ impl Distro {
         });
         if matches && !self.additional.contains_key(pkg) {
             let n = if self.cache_xmls.contains_key(pkg) { pkg.to_string() } else { pkg.replace('_', "-") };
-            return Ok(Ok(&self.cache_xmls[&n]));
+            return Ok(XmlSource::Cached(&self.cache_xmls[&n]));
         }
-        Ok(Err(Self::raw_url(e)?))
+        Ok(XmlSource::Url(Self::raw_url(e)?))
     }
 
     /// Download, in parallel, every package.xml of `pkgs` the cache doesn't have.
     pub fn prefetch<'a>(&self, pkgs: impl IntoIterator<Item = &'a String>) -> Result<usize> {
-        let urls: BTreeSet<String> =
-            pkgs.into_iter().filter_map(|p| self.xml_source(p).ok()?.err()).collect();
+        let urls: BTreeSet<String> = pkgs
+            .into_iter()
+            .filter_map(|p| match self.xml_source(p) {
+                Ok(XmlSource::Url(u)) => Some(u),
+                _ => None,
+            })
+            .collect();
         let n = urls.len();
         let fetched: Vec<(String, String)> =
             urls.into_par_iter().map(|u| Ok((u.clone(), text(&self.client, &u)?))).collect::<Result<_>>()?;
@@ -451,8 +465,8 @@ impl Distro {
 
     pub fn package_xml(&self, pkg: &str) -> Result<String> {
         match self.xml_source(pkg)? {
-            Ok(xml) => Ok(xml.clone()),
-            Err(url) => {
+            XmlSource::Cached(xml) => Ok(xml.clone()),
+            XmlSource::Url(url) => {
                 if let Some(x) = self.fetched.lock().unwrap().get(&url) {
                     return Ok(x.clone());
                 }

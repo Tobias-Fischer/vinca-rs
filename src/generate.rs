@@ -48,8 +48,8 @@ const BUILD_TIME_PYTHON: &str = "python ${{ python_min | default('3.11') }}.*";
 /// Whether a package's own artifact needs Python (host/run), i.e. is built per
 /// Python version. Conservative: a false "yes" only costs builds. Conditions are
 /// evaluated (RoboStack/vinca#189).
-fn python_needed(xml: &PackageXml, build_type: &str) -> bool {
-    if build_type == "ament_python" {
+fn python_needed(xml: &PackageXml, build_type: BuildType) -> bool {
+    if build_type == BuildType::AmentPython {
         return true;
     }
     if xml.member_of_groups.iter().any(|g| g.is_active() && g.name == "rosidl_interface_packages") {
@@ -74,11 +74,35 @@ fn python_needed(xml: &PackageXml, build_type: &str) -> bool {
 /// The ROS packages that every ROS 2 package builds on, and that themselves don't.
 const CORE: [&str; 4] = ["ament_cmake_core", "ament_package", "ros_workspace", "ros_environment"];
 
+#[derive(Clone, Copy, PartialEq)]
+enum BuildType {
+    AmentCmake,
+    AmentPython,
+    /// also catkin's
+    Cmake,
+}
+
+impl BuildType {
+    fn as_str(self) -> &'static str {
+        match self {
+            BuildType::AmentCmake => "ament_cmake",
+            BuildType::AmentPython => "ament_python",
+            BuildType::Cmake => "cmake",
+        }
+    }
+}
+
+/// Run dependencies carry no version (run_exports pin them) and never python.
+#[derive(Clone, Copy, PartialEq)]
+enum DepKind {
+    Build,
+    Run,
+}
+
 pub struct Generator<'a> {
     pub conf: &'a Config,
     pub distro: &'a Distro,
     pub unsatisfied: BTreeSet<String>,
-    os: &'static str,
     /// ROS packages a conda_index maps to conda packages: never built
     shadowed: BTreeSet<String>,
 }
@@ -126,20 +150,13 @@ fn names(deps: &[&Vec<Dependency>]) -> Vec<String> {
 
 impl<'a> Generator<'a> {
     pub fn new(conf: &'a Config, distro: &'a Distro) -> Self {
-        let os = match conf.platform.split('-').next().unwrap_or_default() {
-            "linux" => "linux",
-            "osx" => "osx",
-            "win" => "win",
-            "emscripten" => "emscripten",
-            _ => "other",
-        };
         let shadowed =
             conf.conda_indexes.iter().flat_map(|i| i.keys()).filter(|n| distro.has(n)).cloned().collect();
-        Self { conf, distro, unsatisfied: BTreeSet::new(), os, shadowed }
+        Self { conf, distro, unsatisfied: BTreeSet::new(), shadowed }
     }
 
-    fn unix(&self) -> bool {
-        self.os != "win"
+    fn emscripten(&self) -> bool {
+        self.conf.platform.only_platform() == Some("emscripten")
     }
 
     // ---------------------------------------------------------------- naming
@@ -178,9 +195,8 @@ impl<'a> Generator<'a> {
 
     // ------------------------------------------------------------ resolution
 
-    /// A rosdep key or ROS package -> conda specs. Run dependencies carry no
-    /// version (run_exports pin them) and never python.
-    fn resolve(&mut self, dep: &str, run: bool) -> Result<Vec<String>> {
+    /// A rosdep key or ROS package -> conda specs.
+    fn resolve(&mut self, dep: &str, kind: DepKind) -> Result<Vec<String>> {
         for index in &self.conf.conda_indexes {
             let Some(entry) = index.get(dep) else {
                 continue;
@@ -189,13 +205,17 @@ impl<'a> Generator<'a> {
                 None => return Err(Error::NoRobostackMapping(dep.into())),
                 Some(PlatformList::All(l)) => l.clone(),
                 Some(PlatformList::PerPlatform(m)) => m
-                    .get(&self.conf.platform)
-                    .or_else(|| m.get(if self.os == "win" { "win64" } else { self.os }))
+                    .get(self.conf.platform.as_str())
+                    .or_else(|| match self.conf.platform.only_platform() {
+                        Some("win") => m.get("win64"),
+                        Some(os @ ("linux" | "osx" | "emscripten")) => m.get(os),
+                        _ => None,
+                    })
                     .cloned()
                     .flatten()
                     .unwrap_or_default(),
             };
-            if !run {
+            if kind == DepKind::Build {
                 return Ok(specs);
             }
             return Ok(specs
@@ -212,10 +232,10 @@ impl<'a> Generator<'a> {
         Ok(vec![self.conda_name(dep)])
     }
 
-    fn resolve_all(&mut self, deps: impl IntoIterator<Item = String>, run: bool) -> Result<Vec<String>> {
+    fn resolve_all(&mut self, deps: impl IntoIterator<Item = String>, kind: DepKind) -> Result<Vec<String>> {
         let mut out = vec![];
         for d in deps {
-            out.extend(self.resolve(&d, run)?);
+            out.extend(self.resolve(&d, kind)?);
         }
         Ok(out)
     }
@@ -329,7 +349,7 @@ impl<'a> Generator<'a> {
         let Some(version) = self.distro.version(ros).map(str::to_string) else {
             return Ok(None);
         };
-        let Some(conda) = self.resolve(ros, false)?.into_iter().next() else {
+        let Some(conda) = self.resolve(ros, DepKind::Build)?.into_iter().next() else {
             return Ok(None);
         };
         let xml = self.distro.package(ros)?;
@@ -342,39 +362,41 @@ impl<'a> Generator<'a> {
         let undeclared_ament = xml.export.build_types.is_empty()
             && names(&[&xml.dependencies.buildtool_depends]).iter().any(|d| d.starts_with("ament_cmake"));
         let build_type = if undeclared_ament { "ament_cmake".to_string() } else { xml.build_type() };
-        let script_base = match build_type.as_str() {
-            "ament_cmake" => "ament_cmake",
-            "ament_python" => "ament_python",
-            "cmake" | "catkin" => "cmake",
+        let build_type = match build_type.as_str() {
+            "ament_cmake" => BuildType::AmentCmake,
+            "ament_python" => BuildType::AmentPython,
+            "cmake" | "catkin" => BuildType::Cmake,
             other => {
                 eprintln!("{ros}: unsupported build type {other}");
                 return Ok(None);
             }
         };
-        let script =
-            if self.unix() { format!("build_{script_base}.sh") } else { format!("bld_{script_base}.bat") };
+        let unix = !self.conf.platform.is_windows();
+        let base = build_type.as_str();
+        let script = if unix { format!("build_{base}.sh") } else { format!("bld_{base}.bat") };
 
         let conditional = self.conf.conditional_python_dependency;
-        let needs_python = !conditional || python_needed(&xml, &build_type);
+        let needs_python = !conditional || python_needed(&xml, build_type);
 
         let mut build = Reqs::default();
         build.extend(["${{ compiler('cxx') }}", "${{ compiler('c') }}"]);
-        if self.os != "emscripten" {
+        if !self.emscripten() {
             build.spec("${{ stdlib('c') }}");
         }
         build.extend(["ninja", "python", "setuptools", "git", "git-lfs"]);
-        match self.os {
-            "win" => build.spec("m2-patch"),
-            _ => build.extend(["patch", "make", "coreutils"]),
+        if unix {
+            build.extend(["patch", "make", "coreutils"]);
+        } else {
+            build.spec("m2-patch");
         }
-        if self.os == "osx" {
+        if self.conf.platform.is_osx() {
             build.spec("tapi");
         }
         build.extend(["cmake", "cython"]);
         for s in ["pkg-config", "python", "cross-python_${{ target_platform }}", "numpy"] {
             build.push(Req::cross(s));
         }
-        if self.os == "osx" && matches!(script_base, "ament_cmake" | "cmake") {
+        if self.conf.platform.is_osx() && build_type != BuildType::AmentPython {
             build.spec("clang-tools ${{ (cxx_compiler_version ~ '.*') if cxx_compiler_version is defined else '*' }}");
         }
         let mut host = Reqs::default();
@@ -382,12 +404,12 @@ impl<'a> Generator<'a> {
         let mut run = Reqs::default();
         if needs_python {
             host.extend(["python", "numpy", "pip"]);
-            let python = self.resolve("python", false)?;
+            let python = self.resolve("python", DepKind::Build)?;
             host.extend(python.clone());
             run.extend(python);
         }
-        if build_type == "ament_python" {
-            host.extend(self.resolve("python-setuptools", false)?);
+        if build_type == BuildType::AmentPython {
+            host.extend(self.resolve("python-setuptools", DepKind::Build)?);
         }
         if let Some(m) = self.mutex_spec() {
             host.spec(m.clone());
@@ -417,7 +439,7 @@ impl<'a> Generator<'a> {
         build_deps.extend(groups.clone());
         // build tools go to host, except git, which has to run on the build machine
         for tool in names(&[&d.buildtool_depends, &d.buildtool_export_depends]) {
-            let resolved = self.resolve(&tool, false)?;
+            let resolved = self.resolve(&tool, DepKind::Build)?;
             if resolved.iter().any(|r| r == "git") {
                 build.extend(resolved);
             } else if conditional && resolved == ["python"] {
@@ -430,7 +452,7 @@ impl<'a> Generator<'a> {
         if ros == "cyclonedds" || build_deps.iter().any(|d| d == "cyclonedds") {
             build.push(Req::cross(self.conda_name("cyclonedds")));
         }
-        host.extend(self.resolve_all(build_deps, false)?);
+        host.extend(self.resolve_all(build_deps, DepKind::Build)?);
         let mut run_deps = names(&[
             &d.run_depends,
             &d.exec_depends,
@@ -439,7 +461,7 @@ impl<'a> Generator<'a> {
             &d.buildtool_export_depends,
         ]);
         run_deps.extend(groups);
-        run.extend(self.resolve_all(run_deps, true)?);
+        run.extend(self.resolve_all(run_deps, DepKind::Run)?);
 
         // patch/dependencies.yaml
         if let Some(m) = self.conf.depmods.get(&xml.name).cloned() {
@@ -479,8 +501,8 @@ impl<'a> Generator<'a> {
         }
         // every ament package installs its package.xml: a cheap check that the
         // build installed anything at all (RoboStack/vinca#108)
-        if script_base.starts_with("ament") {
-            let share = if self.unix() { "share" } else { "Library/share" };
+        if build_type != BuildType::Cmake {
+            let share = if unix { "share" } else { "Library/share" };
             recipe.tests.push(serde_yaml::to_value(serde_json::json!({
                 "package_contents": { "files": [format!("{share}/{}/package.xml", xml.name)] }
             }))?);
@@ -520,7 +542,7 @@ impl<'a> Generator<'a> {
     /// Requirement rules that encode which dependencies break when building for
     /// Emscripten or cross-compiling (vinca's `_adjust_requirements`).
     fn apply_rules(&self, build: &mut Reqs, host: &mut Reqs, run: &mut Reqs) {
-        let emscripten = self.os == "emscripten";
+        let emscripten = self.emscripten();
         // cmake is a build tool, never a host or (on Emscripten) run dependency
         if host.remove("cmake") {
             build.spec("cmake");

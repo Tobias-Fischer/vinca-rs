@@ -20,6 +20,7 @@ use clap::{Args, Parser, Subcommand};
 use fs_err as fs;
 use miette::Diagnostic;
 use pixi_build_ros::package_xml::PackageXml;
+use rattler_conda_types::Subdir;
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -88,7 +89,7 @@ struct Target {
     config: PathBuf,
     /// conda subdir to generate for
     #[arg(long)]
-    platform: String,
+    platform: Subdir,
 }
 
 #[derive(Subcommand)]
@@ -114,12 +115,12 @@ enum Command {
         #[arg(long, default_value = "recipes")]
         recipes: PathBuf,
         #[arg(long)]
-        platform: String,
+        platform: Subdir,
         /// workflow template: its jobs.build is copied for every job
         #[arg(long)]
         template: Option<PathBuf>,
         /// the GitHub Actions workflow to write
-        #[arg(long)]
+        #[arg(long, requires = "template")]
         out: Option<PathBuf>,
         /// the jobs as JSON: {"stages": [[{"id", "name", "recipes", "needs"}]]}
         #[arg(long)]
@@ -168,7 +169,7 @@ enum Command {
     /// `{"ok", "text"}` per line, as `rattler-build --render-only --with-solve` decides
     Solve {
         #[arg(long)]
-        platform: String,
+        platform: Subdir,
         /// channels, as rattler-build's -c
         #[arg(long = "channel", short = 'c', required = true)]
         channels: Vec<String>,
@@ -194,7 +195,7 @@ fn write_json(value: &serde_json::Value, out: Option<&Path>) -> Result<()> {
 
 /// The configuration and the distribution it builds.
 fn load(t: &Target) -> Result<(config::Config, distro::Distro)> {
-    let conf = config::read(&t.config, &t.platform)?;
+    let conf = config::read(&t.config, t.platform)?;
     let distro = distro::Distro::load(&conf)?;
     Ok((conf, distro))
 }
@@ -245,9 +246,9 @@ fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> 
         let names: Vec<String> = fs::read_dir(&out)?
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
             .collect();
-        let published = skip_existing::published(&conf.skip_existing, &t.platform, &conf.ros_distro, &names)?;
+        let published = skip_existing::published(&conf.skip_existing, t.platform, &conf.ros_distro, &names)?;
         let variants = variant_config.is_file().then_some(variant_config.as_path());
-        let removed = skip_existing::remove_built(&out, &t.platform, variants, &published)?;
+        let removed = skip_existing::remove_built(&out, t.platform, variants, &published)?;
         eprintln!(
             "{} recipes already published, {} left to build ({:.1?})",
             removed.len(),
@@ -309,8 +310,9 @@ fn run(command: Command) -> Result<()> {
                 }
                 None => workflow::Timings::default(),
             };
+            let template = template.zip(out);
             let opts =
-                workflow::Options { platform, max_batch, timings, vars, stage_barriers, template, out, json };
+                workflow::Options { platform, max_batch, timings, vars, stage_barriers, template, json };
             if !workflow::generate(&recipes, &opts)? {
                 eprintln!("nothing to build");
                 if let Some(j) = opts.json {
@@ -328,7 +330,7 @@ fn run(command: Command) -> Result<()> {
         }
         Command::Requirements { target, out } => requirements_cmd(target, out),
         Command::Solve { platform, channels, variant_config } => {
-            Ok(solve::serve(&platform, &channels, variant_config)?)
+            Ok(solve::serve(platform, &channels, variant_config)?)
         }
     }
 }

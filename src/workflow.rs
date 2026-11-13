@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use fs_err as fs;
 use miette::Diagnostic;
+use rattler_conda_types::Subdir;
 use serde::Deserialize;
 use serde_yaml::{Mapping, Value};
 use thiserror::Error;
@@ -33,8 +34,6 @@ pub enum Error {
     Cycle(String),
     #[error("the workflow template has no jobs.build")]
     NoBuildJob,
-    #[error("a workflow needs --template")]
-    NoTemplate,
     #[error("no schedule fits GitHub's {} KiB workflow limit", MAX_WORKFLOW_BYTES / 1024)]
     #[diagnostic(help("raise --max-batch"))]
     TooLarge,
@@ -59,17 +58,16 @@ pub struct Timings {
 }
 
 pub struct Options {
-    pub platform: String,
+    pub platform: Subdir,
     pub max_batch: usize,
     pub timings: Timings,
     pub vars: Vec<(String, String)>,
     /// the jobs run in stages that each wait for the whole previous one (e.g.
     /// fixed matrix slots), not only for their needs: schedule for that
     pub stage_barriers: bool,
-    /// workflow template: its jobs.build is copied for every job
-    pub template: Option<PathBuf>,
-    /// the GitHub Actions workflow to write (from the template)
-    pub out: Option<PathBuf>,
+    /// workflow template (its jobs.build is copied for every job), and the GitHub
+    /// Actions workflow to write from it
+    pub template: Option<(PathBuf, PathBuf)>,
     /// the jobs as JSON (`{"stages": [[{"id", "name", "recipes", "needs"}]]}`, a job's
     /// stage being one more than its latest need's; RoboStack/vinca#201's format)
     pub json: Option<PathBuf>,
@@ -487,19 +485,17 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
     if recipes.is_empty() {
         return Ok(false);
     }
-    let template = match (&opts.template, &opts.out) {
-        (Some(t), Some(_)) => {
-            let mut text = fs::read_to_string(t)?;
-            text = text.replace("@platform@", &opts.platform);
+    let template = match &opts.template {
+        Some((t, _)) => {
+            let mut text = fs::read_to_string(t)?.replace("@platform@", opts.platform.as_str());
             for (k, v) in &opts.vars {
                 text = text.replace(&format!("@{k}@"), v);
             }
             let tpl =
                 serde_yaml::from_str(&text).map_err(|source| Error::Parse { path: t.clone(), source })?;
-            Some(evaluate_for_platform(&tpl, &opts.platform))
+            Some(evaluate_for_platform(&tpl, opts.platform.as_str()))
         }
-        (None, Some(_)) => return Err(Error::NoTemplate),
-        _ => None,
+        None => None,
     };
 
     let mut known: Vec<f64> = opts.timings.recipes.values().copied().collect();
@@ -508,7 +504,7 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
         t: &opts.timings,
         default: opts.timings.default.or(known.get(known.len() / 2).copied()).unwrap_or(20.0),
         overhead: opts.timings.job_overhead.unwrap_or(30.0),
-        runners: opts.timings.runners.unwrap_or(if opts.platform.starts_with("osx") { 5 } else { 20 }),
+        runners: opts.timings.runners.unwrap_or(if opts.platform.is_osx() { 5 } else { 20 }),
     };
     // the schedule that finishes first on the runners (and fits GitHub's size
     // limit): more slack, fewer and fuller jobs
@@ -541,7 +537,7 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
     let Some((span, how, jobs, needs, stages, yaml)) = best else {
         return Err(Error::TooLarge);
     };
-    if let (Some(out), Some(yaml)) = (&opts.out, &yaml) {
+    if let (Some((_, out)), Some(yaml)) = (&opts.template, &yaml) {
         fs::write(out, yaml)?;
     }
     if let Some(out) = &opts.json {

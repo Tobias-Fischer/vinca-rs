@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use fs_err as fs;
 use indexmap::{IndexMap, IndexSet};
 use miette::Diagnostic;
+use rattler_conda_types::Subdir;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
@@ -176,8 +177,8 @@ pub struct Config {
     _pixi_version: IgnoredAny,
 
     // not keys of vinca.yaml: filled in by `read`
-    #[serde(skip)]
-    pub platform: String,
+    #[serde(skip, default = "noarch")]
+    pub platform: Subdir,
     #[serde(skip)]
     pub patches: Patches,
     #[serde(skip)]
@@ -196,6 +197,10 @@ pub struct Config {
     pub snapshot: IndexMap<String, SnapshotEntry>,
     #[serde(skip)]
     pub additional: IndexMap<String, SnapshotEntry>,
+}
+
+fn noarch() -> Subdir {
+    Subdir::NoArch
 }
 
 pub fn load_yaml(path: &Path) -> Result<Value> {
@@ -225,14 +230,14 @@ fn unique(v: impl IntoIterator<Item = String>) -> Vec<String> {
     v.into_iter().collect::<IndexSet<_>>().into_iter().collect()
 }
 
-fn load_layers(path: &Path, platform: &str, seen: &mut Vec<PathBuf>) -> Result<Vec<(PathBuf, Mapping)>> {
+fn load_layers(path: &Path, platform: Subdir, seen: &mut Vec<PathBuf>) -> Result<Vec<(PathBuf, Mapping)>> {
     let path = fs::canonicalize(path)?;
     if seen.contains(&path) {
         return Err(Error::ExtendsItself(path));
     }
     seen.push(path.clone());
     let dir = path.parent().unwrap().to_path_buf();
-    let mut conf = match evaluate_for_platform(&load_yaml(&path)?, platform) {
+    let mut conf = match evaluate_for_platform(&load_yaml(&path)?, platform.as_str()) {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     };
@@ -359,21 +364,21 @@ fn discover_tests(dir: &Path, distro: &str) -> (HashMap<String, PathBuf>, HashMa
     (tests, folders)
 }
 
-fn selected_mapping(path: &Path, platform: &str) -> Result<Mapping> {
-    Ok(match evaluate_for_platform(&load_yaml(path)?, platform) {
+fn selected_mapping(path: &Path, platform: Subdir) -> Result<Mapping> {
+    Ok(match evaluate_for_platform(&load_yaml(path)?, platform.as_str()) {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     })
 }
 
-pub fn read(path: &Path, platform: &str) -> Result<Config> {
+pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
     let layers = load_layers(path, platform, &mut vec![])?;
     let mut merged = Mapping::new();
     for (_, layer) in &layers {
         merge_configs(&mut merged, layer);
     }
     let mut conf: Config = typed(Value::Mapping(merged), path)?;
-    conf.platform = platform.to_string();
+    conf.platform = platform;
     let dropped: Vec<String> =
         conf.packages_exclude.iter().chain(&conf.packages_skip).map(|n| n.replace('-', "_")).collect();
     conf.packages_select_by_deps.retain(|n| !dropped.contains(&n.replace('-', "_")));
@@ -496,8 +501,8 @@ impl Config {
         let Some(p) = self.patches.get(conda_name) else {
             return vec![];
         };
-        let os = self.platform.split('-').next().unwrap_or_default();
-        p.get("any").into_iter().flatten().chain(p.get(os).into_iter().flatten()).cloned().collect()
+        let os = self.platform.only_platform().and_then(|os| p.get(os));
+        p.get("any").into_iter().flatten().chain(os.into_iter().flatten()).cloned().collect()
     }
 }
 
