@@ -14,7 +14,6 @@ use thiserror::Error;
 
 use crate::config::{self, Config, PackageNameMode};
 use crate::distro::{self, Distro};
-use crate::license::to_spdx;
 use crate::recipe::*;
 use crate::selectors::evaluate_distro;
 
@@ -335,7 +334,7 @@ impl<'a> Generator<'a> {
                 .rfind(|(_, t)| t.as_deref().unwrap_or("website") == "website")
                 .map(|(u, _)| u.clone()),
             repository: self.distro.repository_url(ros, &urls),
-            license: to_spdx(&xml.licenses, ros),
+            license: pixi_build_ros::license::to_spdx(&xml.licenses, ros),
             summary: description(&self.distro.package_xml(ros).unwrap_or_default()),
         }
     }
@@ -617,6 +616,8 @@ impl<'a> Generator<'a> {
             r.requirements.run.spec(m);
         }
         r.about.summary = Some(format!("Compatibility package for {}", canonical.package.name));
+        // only requirements: one build for every platform
+        r.build.noarch = Some(Noarch::Generic);
         Some(RecipeDir { recipe: r, files: RecipeFiles::default() })
     }
 }

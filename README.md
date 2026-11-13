@@ -156,7 +156,7 @@ Data flow of `generate`, one module each:
 | `workflow` | jobs, their needs and the GitHub Actions workflow, from a directory of recipes (no network) |
 
 Besides: `snapshot` (writes `rosdistro_snapshot.yaml`), `solve` (the `solve`
-subcommand: host environments against channels' repodata), `license`, `selectors`.
+subcommand: host environments against channels' repodata), `selectors`. License mapping (SPDX) and the rosdep lookup are pixi-build-ros's, which builds are published rattler-build's.
 
 Network: `generate` and `requirements` fetch rosdistro's index and release cache
 (and package.xml files the cache doesn't match), `skip_existing` and `solve` the

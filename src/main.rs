@@ -6,7 +6,6 @@ mod distro;
 mod generate;
 #[cfg(test)]
 mod golden;
-mod license;
 mod recipe;
 mod selectors;
 mod skip_existing;

@@ -19,8 +19,10 @@ indexmap = { version = "2", features = ["serde"] }
 miette = { version = "7", features = ["fancy"] }
 minijinja = "2"
 # package.xml parsing (REP 149 conditions)
-# the shared rosdep lookup: Tobias-Fischer/pixi pixi-build-ros-shared-map (prefix-dev/pixi#7533), until it is merged
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "a5e2ce6186c2c4143838b8db209c81843c8b8a4f" }
+# the shared rosdep lookup (prefix-dev/pixi#7533) and the license fix (#7534), until merged
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "18ca925cf72709e5e97c73deef5a1a0728197700" }
+# which builds are published: prefix-dev/rattler-build#2943 (on a rattler-build commit pixi's rattler crates resolve with), until merged
+rattler_build_core = { git = "https://github.com/Tobias-Fischer/rattler-build.git", rev = "8e1623781dc656bb230ad668c693217c47c15d2b", default-features = false, features = ["rustls"] }
 rattler_build_recipe = "0.1.24"
 rattler_build_variant_config = "0.1.24"
 rattler_conda_types = { version = "0.58", default-features = false }
@@ -34,7 +36,6 @@ roxmltree = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
-spdx = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
