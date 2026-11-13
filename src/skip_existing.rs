@@ -9,10 +9,31 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
-use rattler_build_recipe::RenderConfig;
-use rattler_conda_types::{PackageRecord, Subdir};
+use fs_err as fs;
+use miette::Diagnostic;
+use rattler_build_recipe::{RenderConfig, variant_render::RenderError};
+use rattler_conda_types::{PackageRecord, ParseSubdirError, Subdir};
+use rattler_repodata_gateway::GatewayError;
 use rayon::prelude::*;
+use thiserror::Error;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error(transparent)]
+    Platform(#[from] ParseSubdirError),
+    #[error("invalid channel url {url}")]
+    Channel { url: String, source: url::ParseError },
+    #[error("failed to start the async runtime")]
+    Runtime(#[source] std::io::Error),
+    #[error("failed to fetch the published packages")]
+    Gateway(#[from] GatewayError),
+    #[error("failed to render {}", path.display())]
+    Render { path: PathBuf, source: RenderError },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub type Build = (String, String, String);
 
@@ -45,13 +66,16 @@ pub fn published(
     use rattler_conda_types::{Channel, PackageName};
     use rattler_repodata_gateway::Gateway;
 
-    let subdir = Subdir::from_str(platform).map_err(|e| anyhow!("{platform}: {e}"))?;
+    let subdir = Subdir::from_str(platform)?;
     let channels: Vec<Channel> = channels
         .iter()
-        .map(|c| Ok(Channel::from_url(url::Url::parse(c).with_context(|| c.clone())?)))
+        .map(|c| {
+            let url = url::Url::parse(c).map_err(|source| Error::Channel { url: c.clone(), source })?;
+            Ok(Channel::from_url(url))
+        })
         .collect::<Result<_>>()?;
     let names: Vec<PackageName> = names.iter().filter_map(|n| PackageName::from_str(n).ok()).collect();
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(Error::Runtime)?;
     let output = runtime.block_on(async {
         Gateway::new().query(channels, [subdir, Subdir::NoArch], names).recursive(false).await
     })?;
@@ -67,7 +91,7 @@ pub fn published(
 
 /// Every output (variant) a recipe builds.
 pub fn render(recipe: &Path, platform: &str, variant_config: Option<&Path>) -> Result<Vec<Build>> {
-    let subdir = Subdir::from_str(platform).map_err(|e| anyhow!("{platform}: {e}"))?;
+    let subdir = Subdir::from_str(platform)?;
     let config = RenderConfig {
         target_platform: subdir,
         build_platform: subdir,
@@ -76,7 +100,7 @@ pub fn render(recipe: &Path, platform: &str, variant_config: Option<&Path>) -> R
     };
     let files: Vec<PathBuf> = variant_config.into_iter().map(Path::to_path_buf).collect();
     let variants = rattler_build_recipe::render_recipe_with_variants(recipe, &files, Some(config))
-        .map_err(|e| anyhow!("rendering {}: {e}", recipe.display()))?;
+        .map_err(|source| Error::Render { path: recipe.into(), source })?;
     Ok(variants
         .into_iter()
         .map(|v| {
@@ -98,7 +122,7 @@ pub fn remove_built(
     variant_config: Option<&Path>,
     published: &HashSet<Build>,
 ) -> Result<BTreeSet<String>> {
-    let dirs: Vec<PathBuf> = std::fs::read_dir(recipes)?
+    let dirs: Vec<PathBuf> = fs::read_dir(recipes)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.join("recipe.yaml").is_file())
         .collect();
@@ -112,7 +136,7 @@ pub fn remove_built(
     let mut removed = BTreeSet::new();
     for dir in built {
         if let Some(dir) = dir? {
-            std::fs::remove_dir_all(&dir)?;
+            fs::remove_dir_all(&dir)?;
             removed.insert(dir.file_name().unwrap().to_string_lossy().to_string());
         }
     }

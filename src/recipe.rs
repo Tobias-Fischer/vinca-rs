@@ -3,10 +3,20 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use fs_err as fs;
 use indexmap::IndexSet;
+use miette::Diagnostic;
 use serde::Serialize;
 use serde_yaml::Value;
+use thiserror::Error;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("failed to serialize the recipe of {0}")]
+    Serialize(String, #[source] serde_yaml::Error),
+}
 
 /// A requirement: a match spec, or one only used when cross-compiling (or only
 /// when not). Recipes are generated per target platform, so platform selectors
@@ -232,39 +242,40 @@ pub struct RecipeDir {
 
 const SCHEMA: &str = "# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json\n\n";
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     if src.is_dir() {
-        std::fs::create_dir_all(dst)?;
-        for e in std::fs::read_dir(src)? {
+        fs::create_dir_all(dst)?;
+        for e in fs::read_dir(src)? {
             let e = e?;
             copy_tree(&e.path(), &dst.join(e.file_name()))?;
         }
     } else {
-        std::fs::copy(src, dst).with_context(|| format!("copying {}", src.display()))?;
+        fs::copy(src, dst)?;
     }
     Ok(())
 }
 
 impl RecipeDir {
-    pub fn write(&self, recipes: &Path) -> Result<()> {
-        let dir = recipes.join(&self.recipe.package.name);
-        std::fs::create_dir_all(&dir)?;
-        let yaml = serde_yaml::to_string(&self.recipe)?;
-        std::fs::write(dir.join("recipe.yaml"), format!("{SCHEMA}{yaml}"))?;
+    pub fn write(&self, recipes: &Path) -> Result<(), Error> {
+        let name = &self.recipe.package.name;
+        let dir = recipes.join(name);
+        fs::create_dir_all(&dir)?;
+        let yaml = serde_yaml::to_string(&self.recipe).map_err(|e| Error::Serialize(name.clone(), e))?;
+        fs::write(dir.join("recipe.yaml"), format!("{SCHEMA}{yaml}"))?;
         for (dest, src) in &self.files.copies {
             let d = dir.join(dest);
             if let Some(p) = d.parent() {
-                std::fs::create_dir_all(p)?;
+                fs::create_dir_all(p)?;
             }
             copy_tree(src, &d)?;
         }
         for (name, content) in &self.files.scripts {
             let p = dir.join(name);
-            std::fs::write(&p, content)?;
+            fs::write(&p, content)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+                fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
             }
         }
         Ok(())

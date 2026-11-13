@@ -13,11 +13,38 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use fs_err as fs;
+use miette::Diagnostic;
 use serde::Deserialize;
 use serde_yaml::{Mapping, Value};
+use thiserror::Error;
 
 use crate::selectors::evaluate_for_platform;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("failed to parse {}", path.display())]
+    Parse { path: PathBuf, source: serde_yaml::Error },
+    #[error("{} has no package.name", .0.display())]
+    NoName(PathBuf),
+    #[error("dependency cycle: {0}")]
+    Cycle(String),
+    #[error("the workflow template has no jobs.build")]
+    NoBuildJob,
+    #[error("a workflow needs --template")]
+    NoTemplate,
+    #[error("no schedule fits GitHub's {} KiB workflow limit", MAX_WORKFLOW_BYTES / 1024)]
+    #[diagnostic(help("raise --max-batch"))]
+    TooLarge,
+    #[error(transparent)]
+    Yaml(#[from] serde_yaml::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// GitHub refuses larger workflow files; keep a margin
 const MAX_WORKFLOW_BYTES: usize = 500 * 1024 - 10 * 1024;
@@ -79,14 +106,14 @@ fn names(v: &Value, out: &mut BTreeSet<String>) {
 
 fn read_recipes(dir: &Path) -> Result<BTreeMap<String, Recipe>> {
     let mut out = BTreeMap::new();
-    for e in std::fs::read_dir(dir)? {
+    for e in fs::read_dir(dir)? {
         let path = e?.path().join("recipe.yaml");
         if !path.is_file() {
             continue;
         }
-        let r: Value = serde_yaml::from_str(&std::fs::read_to_string(&path)?)
-            .with_context(|| path.display().to_string())?;
-        let name = r["package"]["name"].as_str().context("package.name")?.to_string();
+        let r: Value = serde_yaml::from_str(&fs::read_to_string(&path)?)
+            .map_err(|source| Error::Parse { path: path.clone(), source })?;
+        let name = r["package"]["name"].as_str().ok_or_else(|| Error::NoName(path.clone()))?.to_string();
         let mut deps = BTreeSet::new();
         for section in ["build", "host", "run"] {
             names(&r["requirements"][section], &mut deps);
@@ -121,7 +148,7 @@ fn levels(recipes: &BTreeMap<String, Recipe>) -> Result<BTreeMap<String, usize>>
             return Ok(*l);
         }
         if let Some(i) = path.iter().position(|p| p == n) {
-            bail!("dependency cycle: {} -> {n}", path[i..].join(" -> "));
+            return Err(Error::Cycle(format!("{} -> {n}", path[i..].join(" -> "))));
         }
         path.push(n.to_string());
         let mut l = 0;
@@ -429,7 +456,7 @@ fn render(template: &Value, jobs: &[Vec<String>], needs: &[BTreeSet<usize>]) -> 
     let mut wf = template.clone();
     let job_tpl = wf["jobs"]["build"].clone();
     if !job_tpl.is_mapping() {
-        bail!("the workflow template has no jobs.build");
+        return Err(Error::NoBuildJob);
     }
     let mut out = Mapping::new();
     for (i, job) in jobs.iter().enumerate() {
@@ -462,14 +489,16 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
     }
     let template = match (&opts.template, &opts.out) {
         (Some(t), Some(_)) => {
-            let mut text = std::fs::read_to_string(t).with_context(|| t.display().to_string())?;
+            let mut text = fs::read_to_string(t)?;
             text = text.replace("@platform@", &opts.platform);
             for (k, v) in &opts.vars {
                 text = text.replace(&format!("@{k}@"), v);
             }
-            Some(evaluate_for_platform(&serde_yaml::from_str(&text)?, &opts.platform))
+            let tpl =
+                serde_yaml::from_str(&text).map_err(|source| Error::Parse { path: t.clone(), source })?;
+            Some(evaluate_for_platform(&tpl, &opts.platform))
         }
-        (None, Some(_)) => bail!("a workflow needs --template"),
+        (None, Some(_)) => return Err(Error::NoTemplate),
         _ => None,
     };
 
@@ -510,14 +539,13 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
         }
     }
     let Some((span, how, jobs, needs, stages, yaml)) = best else {
-        bail!("no schedule fits GitHub's {} KiB workflow limit: raise --max-batch", MAX_WORKFLOW_BYTES / 1024)
+        return Err(Error::TooLarge);
     };
     if let (Some(out), Some(yaml)) = (&opts.out, &yaml) {
-        std::fs::write(out, yaml).with_context(|| out.display().to_string())?;
+        fs::write(out, yaml)?;
     }
     if let Some(out) = &opts.json {
-        std::fs::write(out, serde_json::to_string_pretty(&stages_json(&jobs, &stages, &needs))?)
-            .with_context(|| out.display().to_string())?;
+        fs::write(out, serde_json::to_string_pretty(&stages_json(&jobs, &stages, &needs))?)?;
     }
     eprintln!(
         "{} recipes in {} jobs ({how}): {:.0} min on {} runners (estimate){}",

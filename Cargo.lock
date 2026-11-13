@@ -8441,10 +8441,11 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vinca-rs"
 version = "0.1.6"
 dependencies = [
- "anyhow",
  "clap",
  "flate2",
+ "fs-err",
  "indexmap 2.14.2",
+ "miette",
  "minijinja 2.24.0",
  "pixi-build-ros",
  "rattler_build_recipe",
@@ -8461,6 +8462,7 @@ dependencies = [
  "serde_yaml",
  "spdx 0.10.9",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "url",
 ]

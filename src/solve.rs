@@ -13,14 +13,43 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
-use rattler_build_recipe::RenderConfig;
+use miette::Diagnostic;
 use rattler_build_recipe::stage1::requirements::Dependency;
-use rattler_conda_types::{Channel, MatchSpec, NamelessMatchSpec, ParseStrictness, Subdir};
-use rattler_repodata_gateway::Gateway;
+use rattler_build_recipe::{RenderConfig, variant_render::RenderError};
+use rattler_conda_types::{
+    Channel, MatchSpec, NamelessMatchSpec, ParseChannelError, ParseStrictness, ParseSubdirError, Subdir,
+};
+use rattler_repodata_gateway::{Gateway, GatewayError};
 use rattler_solve::{ChannelPriority, SolverImpl, SolverTask, resolvo};
-use rattler_virtual_packages::{Override, VirtualPackageOverrides, VirtualPackages};
+use rattler_virtual_packages::{
+    DetectVirtualPackageError, Override, VirtualPackageOverrides, VirtualPackages,
+};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error(transparent)]
+    Platform(#[from] ParseSubdirError),
+    #[error("invalid channel {name}")]
+    Channel { name: String, source: ParseChannelError },
+    #[error("failed to start the async runtime")]
+    Runtime(#[source] std::io::Error),
+    #[error("invalid request {line}")]
+    Request { line: String, source: serde_json::Error },
+    #[error("failed to render {}", path.display())]
+    Render { path: PathBuf, source: RenderError },
+    #[error("failed to detect the virtual packages")]
+    VirtualPackages(#[from] DetectVirtualPackageError),
+    #[error("failed to fetch the repodata")]
+    Gateway(#[from] GatewayError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Deserialize)]
 struct Request {
@@ -71,7 +100,7 @@ impl Server {
         };
         let variants =
             rattler_build_recipe::render_recipe_with_variants(recipe, &[&self.variant_config], Some(config))
-                .map_err(|e| anyhow!("rendering {}: {e}", recipe.display()))?;
+                .map_err(|source| Error::Render { path: recipe.into(), source })?;
         let mut overrides = VirtualPackageOverrides::from_env();
         if let Some(glibc) = glibc {
             overrides.libc = Some(Override::String(glibc));
@@ -114,18 +143,20 @@ impl Server {
 
 pub fn serve(platform: &str, channels: &[String], variant_config: PathBuf) -> Result<()> {
     let server = Server {
-        platform: Subdir::from_str(platform).map_err(|e| anyhow!("{platform}: {e}"))?,
+        platform: Subdir::from_str(platform)?,
         // as rattler-build's -c: a name is a channel on conda.anaconda.org
         channels: {
             let config = rattler_conda_types::ChannelConfig::default_with_root_dir(std::env::current_dir()?);
             channels
                 .iter()
-                .map(|c| Channel::from_str(c, &config).with_context(|| c.clone()))
+                .map(|c| {
+                    Channel::from_str(c, &config).map_err(|source| Error::Channel { name: c.clone(), source })
+                })
                 .collect::<Result<_>>()?
         },
         variant_config,
         gateway: Gateway::new(),
-        runtime: tokio::runtime::Builder::new_multi_thread().enable_all().build()?,
+        runtime: tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(Error::Runtime)?,
     };
     let stdout = std::io::stdout();
     for line in std::io::stdin().lock().lines() {
@@ -133,11 +164,12 @@ pub fn serve(platform: &str, channels: &[String], variant_config: PathBuf) -> Re
         if line.trim().is_empty() {
             continue;
         }
-        let request: Request = serde_json::from_str(&line).with_context(|| line.clone())?;
+        let request: Request =
+            serde_json::from_str(&line).map_err(|source| Error::Request { line: line.clone(), source })?;
         let response = match server.solve(&request.recipe, request.glibc) {
             Ok(None) => Response { ok: true, text: String::new() },
             Ok(Some(explanation)) => Response { ok: false, text: explanation },
-            Err(e) => Response { ok: false, text: format!("{e:#}") },
+            Err(e) => Response { ok: false, text: crate::chain(&e) },
         };
         let mut out = stdout.lock();
         writeln!(out, "{}", serde_json::to_string(&response)?)?;

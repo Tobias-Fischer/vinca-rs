@@ -16,9 +16,62 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use fs_err as fs;
+use miette::Diagnostic;
 use pixi_build_ros::package_xml::PackageXml;
+use thiserror::Error;
+
+#[derive(Debug, Error, Diagnostic)]
+enum Error {
+    #[error("nothing to write")]
+    #[diagnostic(help("give --out (with --template) and/or --json"))]
+    NothingToWrite,
+    #[error("invalid timings {}", path.display())]
+    Timings { path: PathBuf, source: serde_json::Error },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Config(#[from] config::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Distro(#[from] distro::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Generate(#[from] generate::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Recipe(#[from] recipe::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    SkipExisting(#[from] skip_existing::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Snapshot(#[from] snapshot::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Solve(#[from] solve::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Workflow(#[from] workflow::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// An error and its causes, as one line (a cause that its error's message already
+/// ends with only once).
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    for cause in std::iter::successors(e.source(), |c| c.source()).map(ToString::to_string) {
+        if !s.ends_with(&cause) {
+            s = format!("{s}: {cause}");
+        }
+    }
+    s
+}
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -124,7 +177,7 @@ enum Command {
     },
 }
 
-fn parse_var(s: &str) -> Result<(String, String), String> {
+fn parse_var(s: &str) -> std::result::Result<(String, String), String> {
     s.split_once('=')
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .ok_or_else(|| format!("{s}: expected name=value"))
@@ -133,12 +186,10 @@ fn parse_var(s: &str) -> Result<(String, String), String> {
 fn write_json(value: &serde_json::Value, out: Option<&Path>) -> Result<()> {
     let text = serde_json::to_string_pretty(value)?;
     match out {
-        Some(p) => std::fs::write(p, text).with_context(|| p.display().to_string()),
-        None => {
-            println!("{text}");
-            Ok(())
-        }
+        Some(p) => fs::write(p, text)?,
+        None => println!("{text}"),
     }
+    Ok(())
 }
 
 /// The configuration and the distribution it builds.
@@ -166,9 +217,9 @@ fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> 
     let (packages, ros_base) = select(&g)?;
 
     if out.exists() {
-        std::fs::remove_dir_all(&out).with_context(|| out.display().to_string())?;
+        fs::remove_dir_all(&out)?;
     }
-    std::fs::create_dir_all(&out)?;
+    fs::create_dir_all(&out)?;
     let mut n = 0;
     for ros in &packages {
         let Some(dir) = g.package(ros, &ros_base)? else {
@@ -191,7 +242,7 @@ fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> 
     }
     if !all && !conf.skip_existing.is_empty() {
         // the generated recipes' names (one directory per recipe)
-        let names: Vec<String> = std::fs::read_dir(&out)?
+        let names: Vec<String> = fs::read_dir(&out)?
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
             .collect();
         let published = skip_existing::published(&conf.skip_existing, &t.platform, &conf.ros_distro, &names)?;
@@ -228,8 +279,12 @@ fn requirements_cmd(t: Target, out: Option<PathBuf>) -> Result<()> {
     )
 }
 
-fn main() -> Result<()> {
-    match Cli::parse().command {
+fn main() -> miette::Result<()> {
+    Ok(run(Cli::parse().command)?)
+}
+
+fn run(command: Command) -> Result<()> {
+    match command {
         Command::Generate { target, out, variant_config, all } => {
             generate_cmd(target, out, variant_config, all)
         }
@@ -245,11 +300,13 @@ fn main() -> Result<()> {
             stage_barriers,
         } => {
             if out.is_none() && json.is_none() {
-                bail!("nothing to write: give --out (with --template) and/or --json");
+                return Err(Error::NothingToWrite);
             }
             let timings = match timings {
-                Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?)
-                    .with_context(|| p.display().to_string())?,
+                Some(path) => {
+                    let text = fs::read_to_string(&path)?;
+                    serde_json::from_str(&text).map_err(|source| Error::Timings { path, source })?
+                }
                 None => workflow::Timings::default(),
             };
             let opts =
@@ -257,21 +314,21 @@ fn main() -> Result<()> {
             if !workflow::generate(&recipes, &opts)? {
                 eprintln!("nothing to build");
                 if let Some(j) = opts.json {
-                    std::fs::write(j, r#"{"stages": []}"#)?;
+                    fs::write(j, r#"{"stages": []}"#)?;
                 }
             }
             Ok(())
         }
         Command::Snapshot { distro, rosdistro_ref, package, out, fill_dependencies } => {
             if fill_dependencies {
-                snapshot::fill_dependencies(&distro, &out)
+                Ok(snapshot::fill_dependencies(&distro, &out)?)
             } else {
-                snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out)
+                Ok(snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out)?)
             }
         }
         Command::Requirements { target, out } => requirements_cmd(target, out),
         Command::Solve { platform, channels, variant_config } => {
-            solve::serve(&platform, &channels, variant_config)
+            Ok(solve::serve(&platform, &channels, variant_config)?)
         }
     }
 }

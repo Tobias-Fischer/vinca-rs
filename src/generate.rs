@@ -5,15 +5,35 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use fs_err as fs;
+use miette::Diagnostic;
 use pixi_build_ros::package_xml::{Dependency, PackageXml};
+use serde_yaml::Value;
+use thiserror::Error;
 
-use crate::config::{Config, PackageNameMode, PlatformList};
-use crate::distro::Distro;
+use crate::config::{self, Config, PackageNameMode, PlatformList};
+use crate::distro::{self, Distro};
 use crate::license::to_spdx;
 use crate::recipe::*;
 use crate::selectors::evaluate_distro;
-use serde_yaml::Value;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error("conda_index entry {0} has no robostack mapping")]
+    NoRobostackMapping(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Distro(#[from] distro::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Config(#[from] config::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Yaml(#[from] serde_yaml::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// conditional_python_dependency: dependencies that mean a package's own
 /// artifact needs Python (rosidl_default_generators doesn't: rclcpp only uses it
@@ -166,7 +186,7 @@ impl<'a> Generator<'a> {
                 continue;
             };
             let specs = match &entry.robostack {
-                None => bail!("conda_index entry {dep} has no robostack mapping"),
+                None => return Err(Error::NoRobostackMapping(dep.into())),
                 Some(PlatformList::All(l)) => l.clone(),
                 Some(PlatformList::PerPlatform(m)) => m
                     .get(&self.conf.platform)
@@ -202,7 +222,7 @@ impl<'a> Generator<'a> {
 
     // ------------------------------------------------------------- selection
 
-    pub fn select(&self) -> Result<Vec<String>> {
+    pub fn select(&self) -> Result<Vec<String>, distro::Error> {
         let mut skip: HashSet<String> = HashSet::new();
         for s in self.conf.packages_exclude.iter().chain(&self.conf.packages_skip) {
             skip.insert(s.clone());
@@ -256,7 +276,7 @@ impl<'a> Generator<'a> {
 
     fn tests(&self, conda: &str, files: &mut RecipeFiles) -> Result<Vec<serde_yaml::Value>> {
         if let Some(dir) = self.conf.test_folders.get(conda) {
-            for e in std::fs::read_dir(dir)? {
+            for e in fs::read_dir(dir)? {
                 let e = e?;
                 files.copies.push((PathBuf::from(e.file_name()), e.path()));
             }
@@ -264,7 +284,7 @@ impl<'a> Generator<'a> {
         let Some(path) = self.conf.tests.get(conda) else {
             return Ok(vec![]);
         };
-        let t = evaluate_distro(&crate::config::load_yaml(path)?, &self.distro.name);
+        let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name);
         Ok(t.get("tests").and_then(Value::as_sequence).cloned().unwrap_or_default())
     }
 

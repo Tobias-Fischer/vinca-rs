@@ -8,13 +8,35 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use fs_err as fs;
 use indexmap::{IndexMap, IndexSet};
+use miette::Diagnostic;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
+use thiserror::Error;
 
 use crate::selectors::evaluate_for_platform;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("failed to parse {}", path.display())]
+    Parse { path: PathBuf, source: serde_yaml::Error },
+    #[error("invalid {}", path.display())]
+    Invalid { path: PathBuf, source: serde_yaml::Error },
+    #[error("vinca.yaml extends itself: {}", .0.display())]
+    ExtendsItself(PathBuf),
+    #[error("conda_index {name} is not a file next to {}", dir.display())]
+    CondaIndexNotAFile { name: String, dir: PathBuf },
+    #[error(
+        "rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:\n{0}"
+    )]
+    UnexplainedOverrides(String),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 const PATCH_PLATFORMS: [&str; 4] = ["osx", "linux", "win", "emscripten"];
 const PATH_KEYS: [&str; 3] = ["patch_dir", "rosdistro_snapshot", "rosdistro_additional_recipes"];
@@ -177,12 +199,12 @@ pub struct Config {
 }
 
 pub fn load_yaml(path: &Path) -> Result<Value> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    let text = fs::read_to_string(path)?;
+    serde_yaml::from_str(&text).map_err(|source| Error::Parse { path: path.into(), source })
 }
 
 fn typed<T: for<'de> Deserialize<'de>>(v: Value, what: &Path) -> Result<T> {
-    serde_yaml::from_value(v).with_context(|| format!("invalid {}", what.display()))
+    serde_yaml::from_value(v).map_err(|source| Error::Invalid { path: what.into(), source })
 }
 
 fn names(v: Option<&Value>) -> Vec<String> {
@@ -204,9 +226,9 @@ fn unique(v: impl IntoIterator<Item = String>) -> Vec<String> {
 }
 
 fn load_layers(path: &Path, platform: &str, seen: &mut Vec<PathBuf>) -> Result<Vec<(PathBuf, Mapping)>> {
-    let path = path.canonicalize().with_context(|| format!("{}", path.display()))?;
+    let path = fs::canonicalize(path)?;
     if seen.contains(&path) {
-        bail!("vinca.yaml extends itself: {}", path.display());
+        return Err(Error::ExtendsItself(path));
     }
     seen.push(path.clone());
     let dir = path.parent().unwrap().to_path_buf();
@@ -295,7 +317,7 @@ fn add_name_variants<T: Clone>(entries: &mut HashMap<String, T>, distro: &str) {
 /// `<package>[.<platform>].patch`, grouped by package and target OS.
 fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
     let mut patches: Patches = HashMap::new();
-    let mut files: Vec<_> = std::fs::read_dir(dir)?
+    let mut files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "patch"))
         .collect();
@@ -322,7 +344,7 @@ fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
 fn discover_tests(dir: &Path, distro: &str) -> (HashMap<String, PathBuf>, HashMap<String, PathBuf>) {
     let mut tests = HashMap::new();
     let mut folders = HashMap::new();
-    if let Ok(rd) = std::fs::read_dir(dir.join("tests")) {
+    if let Ok(rd) = fs::read_dir(dir.join("tests")) {
         for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
             if p.is_dir() {
@@ -378,7 +400,7 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
         for i in names(layer.get("conda_index")) {
             let p = dir.join(&i);
             if !p.is_file() {
-                bail!("conda_index {i} is not a file next to {}", dir.display());
+                return Err(Error::CondaIndexNotAFile { name: i, dir: dir.clone() });
             }
             layer_indexes.push(typed::<CondaIndex>(load_yaml(&p)?, &p)?);
         }
@@ -430,10 +452,7 @@ fn check_overrides(
         }
     }
     if !unexplained.is_empty() {
-        bail!(
-            "rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:\n{}",
-            unexplained.join("\n")
-        );
+        return Err(Error::UnexplainedOverrides(unexplained.join("\n")));
     }
     Ok(())
 }

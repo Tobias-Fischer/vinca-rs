@@ -10,13 +10,52 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result, anyhow, bail};
 use indexmap::IndexMap;
-use pixi_build_ros::package_xml::PackageXml;
+use miette::Diagnostic;
+use pixi_build_ros::package_xml::{PackageXml, PackageXmlError};
 use rayon::prelude::*;
 use serde::Deserialize;
+use thiserror::Error;
 
 use crate::config::{Config, SnapshotEntry};
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum Error {
+    #[error("failed to create the HTTP client")]
+    Client(#[source] reqwest::Error),
+    #[error("failed to fetch {url}")]
+    Fetch { url: String, source: reqwest::Error },
+    #[error("{status} for {url}")]
+    Status { url: String, status: reqwest::StatusCode },
+    #[error("failed to read {url}")]
+    Read { url: String, source: std::io::Error },
+    #[error("failed to parse {what}")]
+    Parse { what: String, source: serde_yaml::Error },
+    #[error("invalid package.xml of {pkg}")]
+    PackageXml { pkg: String, source: PackageXmlError },
+    #[error("invalid package.xml of {pkg}")]
+    Xml { pkg: String, source: roxmltree::Error },
+    #[error("{0} is not in the rosdistro index")]
+    UnknownDistro(String),
+    #[error("{name} has no distribution file at rosdistro {rosdistro_ref}")]
+    NoDistributionFile { name: String, rosdistro_ref: String },
+    #[error("{0} is not released")]
+    NotReleased(String),
+    #[error("no package.xml for {0}")]
+    NoPackageXml(String),
+    #[error("the snapshot entry of {0} has no dependencies")]
+    #[diagnostic(help(
+        "regenerate the snapshot (`vinca-rs snapshot --distro <distro>`), or add the dependencies \
+         from the pinned releases (`vinca-rs snapshot --distro <distro> --fill-dependencies`)"
+    ))]
+    NoDependencies(String),
+    #[error("only GitHub sources are supported: {0}")]
+    NotGithub(String),
+    #[error("{0} has neither tag nor rev")]
+    NoRef(String),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 const INDEX_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/index-v4.yaml";
 
@@ -129,14 +168,16 @@ pub fn is_release_repo(url: &str) -> bool {
 
 /// A package.xml, parsed (pixi-build-ros) with its conditions evaluated.
 pub fn parse_package(xml: &str, pkg: &str, env: &HashMap<String, String>) -> Result<PackageXml> {
-    Ok(PackageXml::parse(xml).map_err(|e| anyhow!("{pkg}: {e}"))?.evaluate_conditions(env))
+    let xml = PackageXml::parse(xml).map_err(|source| Error::PackageXml { pkg: pkg.into(), source })?;
+    Ok(xml.evaluate_conditions(env))
 }
 
 pub fn client() -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
+    reqwest::blocking::Client::builder()
         .user_agent("vinca-rs")
         .timeout(std::time::Duration::from_secs(120))
-        .build()?)
+        .build()
+        .map_err(Error::Client)
 }
 
 const ROSDISTRO_RAW: &str = "https://raw.githubusercontent.com/ros/rosdistro";
@@ -146,31 +187,34 @@ impl Rosdistro {
     /// `jazzy/2026-10-05`), the releases of that ref instead, keeping only the
     /// cached package.xml files of releases that didn't change.
     pub fn load(client: &reqwest::blocking::Client, name: &str, rosdistro_ref: Option<&str>) -> Result<Self> {
-        let index: Index = serde_yaml::from_str(&get(client, INDEX_URL)?.text()?)?;
-        let info =
-            index.distributions.get(name).with_context(|| format!("{name} is not in the rosdistro index"))?;
+        let index: Index = parse(&text(client, INDEX_URL)?, INDEX_URL)?;
+        let info = index.distributions.get(name).ok_or_else(|| Error::UnknownDistro(name.into()))?;
+        let url = &info.distribution_cache;
+        let read = |source: std::io::Error| Error::Read { url: url.clone(), source };
         let mut gz = Vec::new();
-        get(client, &info.distribution_cache)?.read_to_end(&mut gz)?;
-        let mut text = String::new();
-        flate2::read::GzDecoder::new(&gz[..]).read_to_string(&mut text)?;
-        let cache: Cache = serde_yaml::from_str(&text).context("parsing the rosdistro cache")?;
+        get(client, url)?.read_to_end(&mut gz).map_err(read)?;
+        let mut yaml = String::new();
+        flate2::read::GzDecoder::new(&gz[..]).read_to_string(&mut yaml).map_err(read)?;
+        let cache: Cache = parse(&yaml, url)?;
         let mut releases = releases_of(&cache.distribution_file);
         let mut xmls = cache.release_package_xmls;
         if let Some(r) = rosdistro_ref {
-            let index: serde_yaml::Value =
-                serde_yaml::from_str(&get(client, &format!("{ROSDISTRO_RAW}/{r}/index-v4.yaml"))?.text()?)?;
+            let url = format!("{ROSDISTRO_RAW}/{r}/index-v4.yaml");
+            let index: serde_yaml::Value = parse(&text(client, &url)?, &url)?;
             let urls: Vec<String> = match &index["distributions"][name]["distribution"] {
                 serde_yaml::Value::String(u) => vec![u.clone()],
                 serde_yaml::Value::Sequence(s) => {
                     s.iter().filter_map(|u| u.as_str().map(String::from)).collect()
                 }
-                _ => bail!("{name} has no distribution file at rosdistro {r}"),
+                _ => {
+                    return Err(Error::NoDistributionFile { name: name.into(), rosdistro_ref: r.into() });
+                }
             };
             let mut files = vec![];
             for u in urls {
                 // relative to the index, i.e. the files of the same ref
                 let u = if u.contains("://") { u } else { format!("{ROSDISTRO_RAW}/{r}/{u}") };
-                files.push(serde_yaml::from_str::<DistributionFile>(&get(client, &u)?.text()?)?);
+                files.push(parse::<DistributionFile>(&text(client, &u)?, &u)?);
             }
             let at_ref = releases_of(&files);
             xmls.retain(|pkg, _| at_ref.get(pkg).is_some_and(|rel| releases.get(pkg) == Some(rel)));
@@ -189,14 +233,14 @@ impl Rosdistro {
         if let Some(x) = self.xmls.get(pkg) {
             return Ok(x.clone());
         }
-        let rel = self.releases.get(pkg).with_context(|| format!("{pkg} is not released"))?;
+        let rel = self.releases.get(pkg).ok_or_else(|| Error::NotReleased(pkg.into()))?;
         let entry = SnapshotEntry {
             url: rel.url.clone(),
             version: rel.version.clone(),
             tag: Some(rel.tag.clone()),
             ..Default::default()
         };
-        Ok(get(client, &Distro::raw_url(&entry)?)?.text()?)
+        text(client, &Distro::raw_url(&entry)?)
     }
 
     pub fn condition_env(&self, name: &str) -> HashMap<String, String> {
@@ -221,6 +265,14 @@ pub struct Distro {
     client: reqwest::blocking::Client,
 }
 
+fn parse<T: for<'de> Deserialize<'de>>(text: &str, what: &str) -> Result<T> {
+    serde_yaml::from_str(text).map_err(|source| Error::Parse { what: what.into(), source })
+}
+
+fn text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
+    get(client, url)?.text().map_err(|source| Error::Fetch { url: url.into(), source })
+}
+
 fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blocking::Response> {
     let mut last = None;
     for attempt in 0..5 {
@@ -233,10 +285,10 @@ fn get(client: &reqwest::blocking::Client, url: &str) -> Result<reqwest::blockin
         match req.send() {
             Ok(r) if r.status().is_success() => return Ok(r),
             Ok(r) if ![429, 500, 502, 503, 504].contains(&r.status().as_u16()) => {
-                bail!("{} for {url}", r.status())
+                return Err(Error::Status { url: url.into(), status: r.status() });
             }
-            Ok(r) => last = Some(anyhow!("{} for {url}", r.status())),
-            Err(e) => last = Some(e.into()),
+            Ok(r) => last = Some(Error::Status { url: url.into(), status: r.status() }),
+            Err(source) => last = Some(Error::Fetch { url: url.into(), source }),
         }
         std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
     }
@@ -299,7 +351,8 @@ impl Distro {
         if self.additional.contains_key(pkg) {
             // all dependency tags of the package.xml, unconditionally (as vinca)
             let xml = self.package_xml(pkg)?;
-            let doc = roxmltree::Document::parse(&xml)?;
+            let doc =
+                roxmltree::Document::parse(&xml).map_err(|source| Error::Xml { pkg: pkg.into(), source })?;
             const TAGS: [&str; 8] = [
                 "depend",
                 "build_depend",
@@ -318,11 +371,7 @@ impl Distro {
         }
         match self.entry(pkg).and_then(|e| e.dependencies.clone()) {
             Some(d) => Ok(d.into_iter().collect()),
-            None => bail!(
-                "the snapshot entry of {pkg} has no dependencies: regenerate the snapshot \
-                 (`vinca-rs snapshot --distro <distro>`), or add the dependencies from the \
-                 pinned releases (`vinca-rs snapshot --distro <distro> --fill-dependencies`)"
-            ),
+            None => Err(Error::NoDependencies(pkg.into())),
         }
     }
 
@@ -354,12 +403,12 @@ impl Distro {
     pub fn raw_url(e: &SnapshotEntry) -> Result<String> {
         let base = strip_git(&e.url);
         let Some(owner_repo) = base.split("github.com/").nth(1) else {
-            bail!("only GitHub sources are supported: {}", e.url)
+            return Err(Error::NotGithub(e.url.clone()));
         };
         let reference = match (&e.rev, &e.tag) {
             (Some(rev), _) => rev.clone(),
             (None, Some(tag)) => format!("refs/tags/{tag}"),
-            _ => bail!("{} has neither tag nor rev", e.url),
+            _ => return Err(Error::NoRef(e.url.clone())),
         };
         let folder =
             if e.additional_folder.is_empty() { String::new() } else { format!("{}/", e.additional_folder) };
@@ -374,7 +423,7 @@ impl Distro {
     fn xml_source(&self, pkg: &str) -> Result<Result<&String, String>> {
         let entry = self.entry(pkg).or_else(|| self.additional.get(pkg));
         let Some(e) = entry else {
-            return self.cache_xmls.get(pkg).map(Ok).with_context(|| format!("no package.xml for {pkg}"));
+            return self.cache_xmls.get(pkg).map(Ok).ok_or_else(|| Error::NoPackageXml(pkg.into()));
         };
         let matches = [pkg.to_string(), pkg.replace('_', "-")].iter().any(|n| {
             self.live
@@ -394,10 +443,8 @@ impl Distro {
         let urls: BTreeSet<String> =
             pkgs.into_iter().filter_map(|p| self.xml_source(p).ok()?.err()).collect();
         let n = urls.len();
-        let fetched: Vec<(String, String)> = urls
-            .into_par_iter()
-            .map(|u| Ok((u.clone(), get(&self.client, &u)?.text()?)))
-            .collect::<Result<_>>()?;
+        let fetched: Vec<(String, String)> =
+            urls.into_par_iter().map(|u| Ok((u.clone(), text(&self.client, &u)?))).collect::<Result<_>>()?;
         self.fetched.lock().unwrap().extend(fetched);
         Ok(n)
     }
@@ -409,7 +456,7 @@ impl Distro {
                 if let Some(x) = self.fetched.lock().unwrap().get(&url) {
                     return Ok(x.clone());
                 }
-                let x = get(&self.client, &url)?.text()?;
+                let x = text(&self.client, &url)?;
                 self.fetched.lock().unwrap().insert(url, x.clone());
                 Ok(x)
             }
