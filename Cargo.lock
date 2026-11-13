@@ -2057,7 +2057,7 @@ dependencies = [
 [[package]]
 name = "fancy_display"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "console",
 ]
@@ -4518,7 +4518,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pixi-build-ros"
 version = "0.7.7"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "async-trait",
  "fs-err",
@@ -4548,7 +4548,7 @@ dependencies = [
 [[package]]
 name = "pixi_auth"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "pixi_config",
  "rattler_networking",
@@ -4558,7 +4558,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_backend"
 version = "0.1.7"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "async-trait",
  "clap",
@@ -4598,7 +4598,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_discovery"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "dunce",
  "itertools 0.15.0",
@@ -4620,7 +4620,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_type_conversions"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "itertools 0.15.0",
  "ordermap",
@@ -4634,7 +4634,7 @@ dependencies = [
 [[package]]
 name = "pixi_build_types"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "hex",
  "ordermap",
@@ -4651,7 +4651,7 @@ dependencies = [
 [[package]]
 name = "pixi_config"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "clap",
  "console",
@@ -4682,7 +4682,7 @@ dependencies = [
 [[package]]
 name = "pixi_consts"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "console",
  "rattler_cache",
@@ -4693,7 +4693,7 @@ dependencies = [
 [[package]]
 name = "pixi_git"
 version = "0.0.1"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "astral-reqwest-middleware",
  "dashmap",
@@ -4715,7 +4715,7 @@ dependencies = [
 [[package]]
 name = "pixi_glob"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "dashmap",
  "fs-err",
@@ -4733,7 +4733,7 @@ dependencies = [
 [[package]]
 name = "pixi_manifest"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "archspec",
  "chrono",
@@ -4780,7 +4780,7 @@ dependencies = [
 [[package]]
 name = "pixi_path"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "fs-err",
  "serde",
@@ -4791,7 +4791,7 @@ dependencies = [
 [[package]]
 name = "pixi_pypi_spec"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "itertools 0.15.0",
  "pep440_rs",
@@ -4811,7 +4811,7 @@ dependencies = [
 [[package]]
 name = "pixi_spec"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "chrono",
  "dirs 7.0.0",
@@ -4845,7 +4845,7 @@ dependencies = [
 [[package]]
 name = "pixi_spec_containers"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "itertools 0.15.0",
  "ordermap",
@@ -4857,7 +4857,7 @@ dependencies = [
 [[package]]
 name = "pixi_stable_hash"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "ordermap",
  "rattler_conda_types",
@@ -4868,7 +4868,7 @@ dependencies = [
 [[package]]
 name = "pixi_toml"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "digest 0.11.3",
  "hex",
@@ -4883,7 +4883,7 @@ dependencies = [
 [[package]]
 name = "pixi_toml_edit"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "thiserror 2.0.21",
  "toml_edit",
@@ -4892,7 +4892,7 @@ dependencies = [
 [[package]]
 name = "pixi_utils"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "astral-reqwest-middleware",
  "astral-reqwest-retry",
@@ -4933,7 +4933,7 @@ dependencies = [
 [[package]]
 name = "pixi_variant"
 version = "0.1.0"
-source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=18ca925cf72709e5e97c73deef5a1a0728197700#18ca925cf72709e5e97c73deef5a1a0728197700"
+source = "git+https://github.com/Tobias-Fischer/pixi.git?rev=f5537595dc5a4b158e5af95333aef771972a5aab#f5537595dc5a4b158e5af95333aef771972a5aab"
 dependencies = [
  "serde",
 ]

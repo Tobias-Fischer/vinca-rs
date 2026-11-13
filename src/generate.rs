@@ -1,14 +1,20 @@
 //! From the selected ROS packages to recipes: name policy, rosdep -> conda
-//! resolution, the requirement rules, and the auxiliary recipes (mutex,
-//! legacy-name aliases, conda-forge wrappers).
+//! resolution, RoboStack's per-package configuration, and the auxiliary recipes
+//! (mutex, legacy-name aliases, conda-forge wrappers). The requirement rules and
+//! build scripts are pixi-build-ros's (shared with `pixi build`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
+use pixi_build_ros::build_script::{
+    ACTIVATION_SCRIPTS, BuildMode, BuildType, ScriptVars, render_build_script, script_name,
+};
+use pixi_build_ros::distro::RosVersion;
 use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
-use pixi_build_ros::package_xml::{Dependency, PackageXml};
+use pixi_build_ros::package_xml::PackageXml;
+use pixi_build_ros::requirements::{CORE, DepKind, Rules};
 use serde_yaml::Value;
 use thiserror::Error;
 
@@ -19,8 +25,6 @@ use crate::selectors::evaluate_distro;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error("no template for {0}")]
-    NoTemplate(String),
     #[error(transparent)]
     #[diagnostic(transparent)]
     PackageMap(#[from] PackageMapError),
@@ -38,102 +42,12 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// conditional_python_dependency: dependencies that mean a package's own
-/// artifact needs Python (rosidl_default_generators doesn't: rclcpp only uses it
-/// for test messages; message packages are found by their group instead).
-const PYTHON_MARKERS: [&str; 5] =
-    ["rclpy", "pybind11", "python_cmake_module", "ament_cmake_python", "rosidl_pycommon"];
-
-/// conditional_python_dependency: Python for a package built without it (an
-/// interpreter for ament's scripts), pinned so that it isn't a variant.
-const BUILD_TIME_PYTHON: &str = "python ${{ python_min | default('3.11') }}.*";
-
-/// Whether a package's own artifact needs Python (host/run), i.e. is built per
-/// Python version. Conservative: a false "yes" only costs builds. Conditions are
-/// evaluated (RoboStack/vinca#189).
-fn python_needed(xml: &PackageXml, build_type: BuildType) -> bool {
-    if build_type == BuildType::AmentPython {
-        return true;
-    }
-    if xml.member_of_groups.iter().any(|g| g.is_active() && g.name == "rosidl_interface_packages") {
-        return true;
-    }
-    let d = &xml.dependencies;
-    let deps = names(&[
-        &d.build_depends,
-        &d.build_export_depends,
-        &d.exec_depends,
-        &d.run_depends,
-        &d.test_depends,
-        &d.depend,
-    ]);
-    let tools = names(&[&d.buildtool_depends, &d.buildtool_export_depends]);
-    // build tools only by the markers: a plain python3 buildtool_depend is an
-    // interpreter for a code generator (BUILD_TIME_PYTHON)
-    deps.iter().chain(&tools).any(|n| PYTHON_MARKERS.contains(&n.as_str()))
-        || deps.iter().any(|n| n.contains("python") || n.starts_with("pybind"))
-}
-
-/// The ROS packages that every ROS 2 package builds on, and that themselves don't.
-const CORE: [&str; 4] = ["ament_cmake_core", "ament_package", "ros_workspace", "ros_environment"];
-
-#[derive(Clone, Copy, PartialEq)]
-enum BuildType {
-    AmentCmake,
-    AmentPython,
-    /// also catkin's
-    Cmake,
-}
-
-impl BuildType {
-    fn as_str(self) -> &'static str {
-        match self {
-            BuildType::AmentCmake => "ament_cmake",
-            BuildType::AmentPython => "ament_python",
-            BuildType::Cmake => "cmake",
-        }
-    }
-}
-
-/// Run dependencies carry no version (run_exports pin them) and never python.
-#[derive(Clone, Copy, PartialEq)]
-enum DepKind {
-    Build,
-    Run,
-}
-
 pub struct Generator<'a> {
     pub conf: &'a Config,
     pub distro: &'a Distro,
     pub unsatisfied: BTreeSet<String>,
     /// ROS packages a conda_index maps to conda packages: never built
     shadowed: BTreeSet<String>,
-}
-
-fn template(name: &str) -> Result<&'static str> {
-    Ok(match name {
-        "build_ament_cmake.sh" => include_str!("../templates/build_ament_cmake.sh.in"),
-        "bld_ament_cmake.bat" => include_str!("../templates/bld_ament_cmake.bat.in"),
-        "build_ament_python.sh" => include_str!("../templates/build_ament_python.sh.in"),
-        "bld_ament_python.bat" => include_str!("../templates/bld_ament_python.bat.in"),
-        "build_cmake.sh" => include_str!("../templates/build_cmake.sh.in"),
-        "bld_cmake.bat" => include_str!("../templates/bld_cmake.bat.in"),
-        "activate.sh" => include_str!("../templates/activate.sh.in"),
-        "activate.bat" => include_str!("../templates/activate.bat.in"),
-        "activate.ps1" => include_str!("../templates/activate.ps1.in"),
-        "deactivate.sh" => include_str!("../templates/deactivate.sh.in"),
-        "deactivate.bat" => include_str!("../templates/deactivate.bat.in"),
-        "deactivate.ps1" => include_str!("../templates/deactivate.ps1.in"),
-        _ => return Err(Error::NoTemplate(name.into())),
-    })
-}
-
-fn render(tpl: &str, vars: &[(&str, &str)]) -> String {
-    let mut s = tpl.to_string();
-    for (k, v) in vars {
-        s = s.replace(&format!("@({k})"), v);
-    }
-    s.replace("@@", "@")
 }
 
 /// catkin_pkg's description: the element's inner XML, stripped.
@@ -147,18 +61,16 @@ fn description(xml: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-fn names(deps: &[&Vec<Dependency>]) -> Vec<String> {
-    deps.iter().flat_map(|d| d.iter()).filter(|d| d.is_active()).map(|d| d.name.clone()).collect()
-}
-
 impl<'a> Generator<'a> {
     pub fn new(conf: &'a Config, distro: &'a Distro) -> Self {
         let shadowed = conf.package_map.keys().filter(|n| distro.has(n)).cloned().collect();
         Self { conf, distro, unsatisfied: BTreeSet::new(), shadowed }
     }
 
-    fn emscripten(&self) -> bool {
-        self.conf.platform.only_platform() == Some("emscripten")
+    /// The distribution, as pixi-build-ros's rules know it.
+    fn ros_distro(&self) -> pixi_build_ros::distro::Distro {
+        let version = if self.distro.ros1 { RosVersion::Ros1 } else { RosVersion::Ros2 };
+        pixi_build_ros::distro::Distro { name: self.distro.name.clone(), version }
     }
 
     // ---------------------------------------------------------------- naming
@@ -166,8 +78,7 @@ impl<'a> Generator<'a> {
     pub fn prefix(&self) -> String {
         match self.conf.package_name_mode {
             PackageNameMode::Legacy => format!("ros-{}", self.distro.name),
-            _ if self.distro.ros1 => "ros".into(),
-            _ => "ros2".into(),
+            _ => self.ros_distro().package_prefix(),
         }
     }
 
@@ -222,14 +133,6 @@ impl<'a> Generator<'a> {
             return None;
         }
         Some(self.conda_name(dep))
-    }
-
-    fn resolve_all(&mut self, deps: impl IntoIterator<Item = String>, kind: DepKind) -> Result<Vec<String>> {
-        let mut out = vec![];
-        for d in deps {
-            out.extend(self.resolve(&d, kind)?);
-        }
-        Ok(out)
     }
 
     // ------------------------------------------------------------- selection
@@ -350,70 +253,23 @@ impl<'a> Generator<'a> {
         if self.conf.is_dummy(ros) {
             return self.wrapper(ros, &conda, &version, &xml).map(Some);
         }
-        // No <build_type> means catkin (REP 140). In ROS 2 that is a CMake package,
-        // an ament one when it builds with ament_cmake (e.g. async_web_server_cpp,
-        // mrt_cmake_modules, which only declare build types for ROS 1).
-        let undeclared_ament = xml.export.build_types.is_empty()
-            && names(&[&xml.dependencies.buildtool_depends]).iter().any(|d| d.starts_with("ament_cmake"));
-        let build_type = if undeclared_ament { "ament_cmake".to_string() } else { xml.build_type() };
-        let build_type = match build_type.as_str() {
-            "ament_cmake" => BuildType::AmentCmake,
-            "ament_python" => BuildType::AmentPython,
-            "cmake" | "catkin" => BuildType::Cmake,
-            other => {
-                eprintln!("{ros}: unsupported build type {other}");
+        let build_type = match BuildType::of(&xml, &self.ros_distro()) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{ros}: {e}");
                 return Ok(None);
             }
         };
         let unix = !self.conf.platform.is_windows();
-        let base = build_type.as_str();
-        let script = if unix { format!("build_{base}.sh") } else { format!("bld_{base}.bat") };
+        let script = script_name(build_type, !unix);
 
-        let conditional = self.conf.conditional_python_dependency;
-        let needs_python = !conditional || python_needed(&xml, build_type);
-
-        let mut build = Reqs::default();
-        build.extend(["${{ compiler('cxx') }}", "${{ compiler('c') }}"]);
-        if !self.emscripten() {
-            build.spec("${{ stdlib('c') }}");
-        }
-        build.extend(["ninja", "python", "setuptools", "git", "git-lfs"]);
-        if unix {
-            build.extend(["patch", "make", "coreutils"]);
-        } else {
-            build.spec("m2-patch");
-        }
-        if self.conf.platform.is_osx() {
-            build.spec("tapi");
-        }
-        build.extend(["cmake", "cython"]);
-        for s in ["pkg-config", "python", "cross-python_${{ target_platform }}", "numpy"] {
-            build.push(Req::cross(s));
-        }
-        if self.conf.platform.is_osx() && build_type != BuildType::AmentPython {
-            build.spec("clang-tools ${{ (cxx_compiler_version ~ '.*') if cxx_compiler_version is defined else '*' }}");
-        }
-        let mut host = Reqs::default();
-        host.push(Req::native("pkg-config"));
-        let mut run = Reqs::default();
-        if needs_python {
-            host.extend(["python", "numpy", "pip"]);
-            let python = self.resolve("python", DepKind::Build)?;
-            host.extend(python.clone());
-            run.extend(python);
-        }
-        if build_type == BuildType::AmentPython {
-            host.extend(self.resolve("python-setuptools", DepKind::Build)?);
-        }
-        if let Some(m) = self.mutex_spec() {
-            host.spec(m.clone());
-            run.spec(m);
-        }
-        if !self.distro.ros1 && !CORE.contains(&ros) {
-            host.extend([self.conda_name("ros_environment"), self.conda_name("ros_workspace")]);
-            run.spec(self.conda_name("ros_workspace"));
-        }
-
+        let rules = Rules {
+            package_prefix: self.prefix(),
+            mutex: self.mutex_spec(),
+            c_stdlib: true,
+            conditional_python: self.conf.conditional_python_dependency,
+            ..Rules::new(self.ros_distro(), self.conf.platform)
+        };
         // <group_depend>: the members among ros_base's packages
         let groups: Vec<String> = xml
             .group_depends
@@ -425,44 +281,15 @@ impl<'a> Generator<'a> {
                     .map(|p| p.name.clone())
             })
             .collect();
-        let d = &xml.dependencies;
-        let mut build_deps = names(&[&d.build_depends, &d.depend, &d.build_export_depends, &d.test_depends]);
-        if xml.format == 1 {
-            build_deps.extend(names(&[&d.run_depends]));
-        }
-        build_deps.extend(groups.clone());
-        // build tools go to host, except git, which has to run on the build machine
-        for tool in names(&[&d.buildtool_depends, &d.buildtool_export_depends]) {
-            let resolved = self.resolve(&tool, DepKind::Build)?;
-            if resolved.iter().any(|r| r == "git") {
-                build.extend(resolved);
-            } else if conditional && resolved == ["python"] {
-                // an interpreter for a code generator: BUILD_TIME_PYTHON
-            } else if !resolved.is_empty() && tool != "cmake" {
-                build_deps.push(tool);
-            }
-        }
-        // cyclonedds generates code during the build
-        if ros == "cyclonedds" || build_deps.iter().any(|d| d == "cyclonedds") {
-            build.push(Req::cross(self.conda_name("cyclonedds")));
-        }
-        host.extend(self.resolve_all(build_deps, DepKind::Build)?);
-        let mut run_deps = names(&[
-            &d.run_depends,
-            &d.exec_depends,
-            &d.depend,
-            &d.build_export_depends,
-            &d.buildtool_export_depends,
-        ]);
-        run_deps.extend(groups);
-        run.extend(self.resolve_all(run_deps, DepKind::Run)?);
+        let mut reqs =
+            rules.requirements(&xml, build_type, &groups, |dep, kind| self.resolve(&dep.name, kind))?;
 
         // patch/dependencies.yaml
         if let Some(m) = self.conf.depmods(ros).cloned() {
             for (list, add, remove) in [
-                (&mut build, &m.add_build, &m.remove_build),
-                (&mut host, &m.add_host, &m.remove_host),
-                (&mut run, &m.add_run, &m.remove_run),
+                (&mut reqs.build, &m.add_build, &m.remove_build),
+                (&mut reqs.host, &m.add_host, &m.remove_host),
+                (&mut reqs.run, &m.add_run, &m.remove_run),
             ] {
                 for a in add.iter().filter_map(|v| v.as_str()) {
                     list.spec(self.normalize(a));
@@ -476,17 +303,13 @@ impl<'a> Generator<'a> {
 
         // after dependencies.yaml, which can give a package Python (e.g. one that
         // embeds the interpreter)
-        let python_free = conditional && !host.contains("python");
-        if python_free {
-            build.replace("python", BUILD_TIME_PYTHON);
-        }
-        self.apply_rules(&mut build, &mut host, &mut run);
+        let python_free = rules.finish(&mut reqs);
 
         let mut recipe = Recipe::new(&conda, &version, self.conf.build_number_for(&conda));
-        recipe.build.script = Some(script.clone());
+        recipe.build.script = Some(script.to_string());
         recipe.build.post_process = sysroot_post_process();
         recipe.requirements =
-            Requirements { build, host: host.sorted(), run: run.sorted(), ..Default::default() };
+            Requirements { build: reqs.build, host: reqs.host, run: reqs.run, ..Default::default() };
         recipe.about = self.about(ros, &xml);
 
         let mut files = RecipeFiles::default();
@@ -496,7 +319,7 @@ impl<'a> Generator<'a> {
         }
         // every ament package installs its package.xml: a cheap check that the
         // build installed anything at all (RoboStack/vinca#108)
-        if build_type != BuildType::Cmake {
+        if !matches!(build_type, BuildType::Cmake | BuildType::Catkin) {
             let share = if unix { "share" } else { "Library/share" };
             recipe.tests.push(serde_yaml::to_value(serde_json::json!({
                 "package_contents": { "files": [format!("{share}/{}/package.xml", xml.name)] }
@@ -515,66 +338,27 @@ impl<'a> Generator<'a> {
         recipe.tests.extend(self.tests(&conda, &mut files)?);
         let info = self.conf.info(&conda);
         let prefix = self.prefix();
-        let vars = [
-            ("ros_package_prefix", prefix.as_str()),
-            ("additional_cmake_args", info.additional_cmake_args.as_deref().unwrap_or("")),
-            ("additional_folder", self.distro.additional_folder(ros)),
-            ("ros_distro", self.distro.name.as_str()),
-        ];
-        files.scripts.push((script.clone(), render(template(&script)?, &vars)));
+        let folder = self.distro.additional_folder(ros);
+        let source_dir = if unix {
+            format!("$SRC_DIR/$PKG_NAME/src/work/{folder}")
+        } else {
+            format!("%SRC_DIR%\\%PKG_NAME%\\src\\work\\{folder}")
+        };
+        let vars = ScriptVars {
+            generator: "vinca-rs (https://github.com/Tobias-Fischer/vinca-rs)",
+            source_dir: &source_dir,
+            package_prefix: &prefix,
+            distro: &self.distro.name,
+            cmake_args: info.additional_cmake_args.as_deref().unwrap_or(""),
+        };
+        files
+            .scripts
+            .push((script.to_string(), render_build_script(build_type, !unix, BuildMode::Clean, &vars)));
         // ros_workspace installs the environment's activation scripts
         if ros == "ros_workspace" {
-            for s in ["activate", "deactivate"] {
-                for ext in ["sh", "bat", "ps1"] {
-                    let n = format!("{s}.{ext}");
-                    files.scripts.push((n.clone(), render(template(&n)?, &vars)));
-                }
-            }
+            files.scripts.extend(ACTIVATION_SCRIPTS.iter().map(|(n, s)| (n.to_string(), s.to_string())));
         }
         Ok(Some(RecipeDir { recipe, files }))
-    }
-
-    /// Requirement rules that encode which dependencies break when building for
-    /// Emscripten or cross-compiling (vinca's `_adjust_requirements`).
-    fn apply_rules(&self, build: &mut Reqs, host: &mut Reqs, run: &mut Reqs) {
-        let emscripten = self.emscripten();
-        // cmake is a build tool, never a host or (on Emscripten) run dependency
-        for spec in host.remove("cmake") {
-            build.spec(spec);
-        }
-        if emscripten {
-            run.remove("cmake");
-        }
-        // spellchecker:off
-        // mimick_vendor runs on the build machine; it doesn't build for Emscripten
-        let mimick = self.conda_name("mimick_vendor");
-        let had = host.remove(&mimick);
-        if emscripten {
-            build.remove(&mimick);
-        } else {
-            build.extend(had);
-        }
-        // spellchecker:on
-        // Emscripten resolves the generators out of `build`
-        let gens = self.conda_name("rosidl_default_generators");
-        if emscripten && host.contains(&gens) {
-            build.spec(gens);
-        }
-        if host.contains(&self.conda_name("pybind11_vendor")) {
-            host.spec("pybind11");
-        }
-        for d in ["pybind11", "qt-main"] {
-            if host.contains(d) {
-                build.push(Req::cross(d));
-            }
-        }
-        // build-machine tools: host when native, build when cross-compiling
-        for d in ["pyqt-builder", "git", "doxygen", "git-lfs"] {
-            for spec in host.remove(d) {
-                host.push(Req::native(spec.clone()));
-                build.push(Req::cross(spec));
-            }
-        }
     }
 
     /// The distribution mutex.

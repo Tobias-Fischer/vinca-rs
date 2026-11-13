@@ -150,13 +150,13 @@ Data flow of `generate`, one module each:
 |---|---|
 | `config` | the `vinca.yaml` layers (`extends`), selectors resolved for the platform, and per layer the patches, tests, `dependencies.yaml`, `pkg_additional_info.yaml` and `conda_index` files, keyed by `package_key` (the ROS name) |
 | `distro` | the snapshot (versions, sources, dependency graph) and the package.xml files: rosdistro's release cache, else the pinned tag on GitHub; REP 149 conditions in a fixed environment |
-| `generate` | selection, rosdep → conda names, the requirement rules, aliases, wrappers and the mutex |
+| `generate` | selection, rosdep → conda names, RoboStack's per-package configuration (dependencies.yaml, tests, sources), aliases, wrappers and the mutex |
 | `recipe` | the typed recipe and its directory (recipe.yaml, scripts, patches, test files) |
 | `skip_existing` | drops the recipes whose builds are on the `skip_existing` channels |
 | `workflow` | jobs, their needs and the GitHub Actions workflow, from a directory of recipes (no network) |
 
 Besides: `snapshot` (writes `rosdistro_snapshot.yaml`), `solve` (the `solve`
-subcommand: host environments against channels' repodata), `selectors`. License mapping (SPDX) and the rosdep lookup are pixi-build-ros's, which builds are published rattler-build's.
+subcommand: host environments against channels' repodata), `selectors`. License mapping (SPDX), the rosdep lookup, the requirement rules and the build scripts are pixi-build-ros's (shared with `pixi build`), which builds are published rattler-build's.
 
 Network: `generate` and `requirements` fetch rosdistro's index and release cache
 (and package.xml files the cache doesn't match), `skip_existing` and `solve` the

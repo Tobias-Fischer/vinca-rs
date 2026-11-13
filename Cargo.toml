@@ -19,8 +19,10 @@ indexmap = { version = "2", features = ["serde"] }
 miette = { version = "7", features = ["fancy"] }
 minijinja = "2"
 # package.xml parsing (REP 149 conditions)
-# the shared rosdep lookup (prefix-dev/pixi#7533) and the license fix (#7534), until merged
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "18ca925cf72709e5e97c73deef5a1a0728197700" }
+# the shared rosdep lookup (prefix-dev/pixi#7533), the license fix (#7534), and the
+# requirement rules and build scripts (Tobias-Fischer/pixi pixi-build-ros-recipe-rules),
+# until merged
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "f5537595dc5a4b158e5af95333aef771972a5aab" }
 # which builds are published: prefix-dev/rattler-build#2943 (on a rattler-build commit pixi's rattler crates resolve with), until merged
 rattler_build_core = { git = "https://github.com/Tobias-Fischer/rattler-build.git", rev = "8e1623781dc656bb230ad668c693217c47c15d2b", default-features = false, features = ["rustls"] }
 rattler_build_recipe = "0.1.24"

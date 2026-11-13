@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
-use indexmap::IndexSet;
 use miette::Diagnostic;
 use serde::Serialize;
 use serde_yaml::Value;
@@ -18,110 +17,8 @@ pub enum Error {
     Serialize(String, #[source] serde_yaml::Error),
 }
 
-/// A requirement: a match spec, or one only used when cross-compiling (or only
-/// when not). Recipes are generated per target platform, so platform selectors
-/// are resolved at generation time; only the build-vs-target platform remains.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(untagged)]
-pub enum Req {
-    Spec(String),
-    If {
-        #[serde(rename = "if")]
-        cond: BuildPlatform,
-        then: Vec<String>,
-    },
-}
-
-/// Build vs target platform; `Ord` as the conditions' text sorts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-pub enum BuildPlatform {
-    #[serde(rename = "build_platform != target_platform")]
-    Cross,
-    #[serde(rename = "build_platform == target_platform")]
-    Native,
-}
-
-impl Req {
-    pub fn cross(s: impl Into<String>) -> Self {
-        Req::If { cond: BuildPlatform::Cross, then: vec![s.into()] }
-    }
-    pub fn native(s: impl Into<String>) -> Self {
-        Req::If { cond: BuildPlatform::Native, then: vec![s.into()] }
-    }
-    fn sort_key(&self) -> (Option<BuildPlatform>, String) {
-        match self {
-            Req::Spec(s) => (None, s.clone()),
-            Req::If { cond, then } => (Some(*cond), then.join(",")),
-        }
-    }
-}
-
-/// An ordered, duplicate-free requirement list.
-#[derive(Debug, Clone, Default)]
-pub struct Reqs(IndexSet<Req>);
-
-impl Reqs {
-    pub fn push(&mut self, r: Req) {
-        self.0.insert(r);
-    }
-    pub fn spec(&mut self, s: impl Into<String>) {
-        self.push(Req::Spec(s.into()));
-    }
-    pub fn extend(&mut self, specs: impl IntoIterator<Item = impl Into<String>>) {
-        for s in specs {
-            self.spec(s);
-        }
-    }
-    pub fn contains(&self, s: &str) -> bool {
-        self.0.contains(&Req::Spec(s.to_string()))
-    }
-    /// Remove the requirements on package `name` (a spec's first word), also
-    /// inside conditional requirements; the removed specs.
-    pub fn remove(&mut self, name: &str) -> Vec<String> {
-        let is = |s: &String| s.split_whitespace().next() == Some(name);
-        let mut removed = vec![];
-        self.0 = std::mem::take(&mut self.0)
-            .into_iter()
-            .filter_map(|r| match r {
-                Req::Spec(s) if is(&s) => {
-                    removed.push(s);
-                    None
-                }
-                Req::If { cond, then } => {
-                    let (gone, keep): (Vec<String>, Vec<String>) = then.into_iter().partition(is);
-                    removed.extend(gone);
-                    (!keep.is_empty()).then_some(Req::If { cond, then: keep })
-                }
-                r => Some(r),
-            })
-            .collect();
-        removed
-    }
-    pub fn sorted(mut self) -> Self {
-        self.0.sort_by_key(Req::sort_key);
-        self
-    }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-    /// Replace a spec, also inside conditional requirements.
-    pub fn replace(&mut self, from: &str, to: &str) {
-        let swap = |s: &String| if s == from { to.to_string() } else { s.clone() };
-        self.0 = std::mem::take(&mut self.0)
-            .into_iter()
-            .map(|r| match r {
-                Req::Spec(s) => Req::Spec(swap(&s)),
-                Req::If { cond, then } => Req::If { cond, then: then.iter().map(swap).collect() },
-            })
-            .collect();
-    }
-}
-
-impl Serialize for Reqs {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_seq(self.0.iter())
-    }
-}
+/// The requirement lists, pixi-build-ros's (its rules make them).
+pub use pixi_build_ros::requirements::Reqs;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Package {
@@ -318,28 +215,5 @@ impl RecipeDir {
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn reqs(r: Vec<Req>) -> Reqs {
-        let mut out = Reqs::default();
-        r.into_iter().for_each(|r| out.push(r));
-        out
-    }
-
-    #[test]
-    fn remove_by_package_name() {
-        let mut r = reqs(vec![
-            Req::Spec("foo >=1".into()),
-            Req::Spec("foo-bar".into()),
-            Req::native("foo"),
-            Req::If { cond: BuildPlatform::Cross, then: vec!["foo 2.*".into(), "baz".into()] },
-        ]);
-        assert_eq!(r.remove("foo"), ["foo >=1", "foo", "foo 2.*"]);
-        assert_eq!(r.0.into_iter().collect::<Vec<_>>(), [Req::Spec("foo-bar".into()), Req::cross("baz")]);
     }
 }
