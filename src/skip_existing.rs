@@ -1,16 +1,18 @@
 //! Drop the recipes whose exact builds are already published.
 //!
 //! A package is built when a build with the same name, version and build string
-//! (variant hash + build number) is on one of the `skip_existing` channels. The
-//! recipes are rendered with rattler-build's own crates against the variant
-//! config to get those build strings, as built natively on the target platform.
+//! (variant hash + build number) is on one of the `skip_existing` channels, for
+//! this distribution. The recipes are rendered with rattler-build's own crates
+//! against the variant config to get those build strings, as built natively on
+//! the target platform; rattler-build's `--skip-existing` matching decides.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use fs_err as fs;
 use miette::Diagnostic;
+use rattler_build_core::build::{PackageIdentity, existing_packages};
 use rattler_build_recipe::{RenderConfig, variant_render::RenderError};
 use rattler_conda_types::{PackageRecord, Subdir};
 use rattler_repodata_gateway::GatewayError;
@@ -33,8 +35,6 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub type Build = (String, String, String);
-
 /// ROS 2 packages share their names across distributions (ros2-*): only builds
 /// for this distribution (its mutex, or the mutex's build string) count. Without
 /// a mutex package, every build does.
@@ -51,8 +51,8 @@ fn built_for_distro(r: &PackageRecord, distro: &str, mutex: Option<&str>) -> boo
         || mutexes.iter().any(|d| d.contains(&format!(" {distro}_")) || d.ends_with(&format!(" {distro}")))
 }
 
-/// (name, version, build string) of the builds of `names` for `distro` on the
-/// channels. Fetched with pixi's repodata gateway (rattler): only the packages'
+/// The builds of `names` for `distro` on the channels (their platform and
+/// noarch subdirs). Fetched with pixi's repodata gateway (rattler): only the packages'
 /// shards where the channel is sharded (prefix.dev), else its compressed
 /// repodata, in parallel and cached (HTTP caching) in rattler's cache, which
 /// pixi and rattler-build share.
@@ -62,7 +62,7 @@ pub fn published(
     distro: &str,
     mutex: Option<&str>,
     names: &[String],
-) -> Result<HashSet<Build>> {
+) -> Result<Vec<PackageRecord>> {
     use rattler_conda_types::{Channel, PackageName};
     use rattler_repodata_gateway::Gateway;
 
@@ -84,12 +84,12 @@ pub fn published(
         .flat_map(|repodata| repodata.iter())
         .map(|r| &r.package_record)
         .filter(|p| built_for_distro(p, distro, mutex))
-        .map(|p| (p.name.as_normalized().to_string(), p.version.to_string(), p.build.to_string()))
+        .cloned()
         .collect())
 }
 
 /// Every output (variant) a recipe builds.
-pub fn render(recipe: &Path, subdir: Subdir, variant_config: Option<&Path>) -> Result<Vec<Build>> {
+pub fn render(recipe: &Path, subdir: Subdir, variant_config: Option<&Path>) -> Result<Vec<PackageIdentity>> {
     let config = RenderConfig {
         target_platform: subdir,
         build_platform: subdir,
@@ -104,11 +104,7 @@ pub fn render(recipe: &Path, subdir: Subdir, variant_config: Option<&Path>) -> R
         .map(|v| {
             let r = v.recipe;
             let build: Option<String> = r.build.string.into();
-            (
-                r.package.name.as_normalized().to_string(),
-                r.package.version.to_string(),
-                build.unwrap_or_default(),
-            )
+            PackageIdentity::new(r.package.name, r.package.version, build.unwrap_or_default())
         })
         .collect())
 }
@@ -118,22 +114,21 @@ pub fn remove_built(
     recipes: &Path,
     subdir: Subdir,
     variant_config: Option<&Path>,
-    published: &HashSet<Build>,
+    published: &[PackageRecord],
 ) -> Result<BTreeSet<String>> {
     let dirs: Vec<PathBuf> = fs::read_dir(recipes)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.join("recipe.yaml").is_file())
         .collect();
-    let built: Vec<Result<Option<PathBuf>>> = dirs
+    let rendered = dirs
         .into_par_iter()
-        .map(|dir| {
-            let builds = render(&dir.join("recipe.yaml"), subdir, variant_config)?;
-            Ok((!builds.is_empty() && builds.iter().all(|b| published.contains(b))).then_some(dir))
-        })
-        .collect();
+        .map(|dir| Ok((render(&dir.join("recipe.yaml"), subdir, variant_config)?, dir)))
+        .collect::<Result<Vec<_>>>()?;
+    let outputs: Vec<PackageIdentity> = rendered.iter().flat_map(|(o, _)| o.iter().cloned()).collect();
+    let existing = existing_packages(published, &outputs);
     let mut removed = BTreeSet::new();
-    for dir in built {
-        if let Some(dir) = dir? {
+    for (outputs, dir) in rendered {
+        if !outputs.is_empty() && outputs.iter().all(|o| existing.contains(o)) {
             fs::remove_dir_all(&dir)?;
             removed.insert(dir.file_name().unwrap().to_string_lossy().to_string());
         }

@@ -6,6 +6,7 @@ package:
 build:
   number: 3
   script: ''
+  noarch: generic
 requirements:
   run:
   - ros2-demo-wrapped ==2.1.0
