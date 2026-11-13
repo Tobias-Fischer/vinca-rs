@@ -32,6 +32,13 @@ pub enum Error {
     NoName(PathBuf),
     #[error("dependency cycle: {0}")]
     Cycle(String),
+    #[error("in {}", path.display())]
+    Selector {
+        path: PathBuf,
+        #[source]
+        #[diagnostic_source]
+        source: crate::selectors::Error,
+    },
     #[error("the workflow template has no jobs.build")]
     NoBuildJob,
     #[error("no schedule fits GitHub's {} KiB workflow limit", MAX_WORKFLOW_BYTES / 1024)]
@@ -493,7 +500,10 @@ pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
             }
             let tpl =
                 serde_yaml::from_str(&text).map_err(|source| Error::Parse { path: t.clone(), source })?;
-            Some(evaluate_for_platform(&tpl, opts.platform.as_str()))
+            Some(
+                evaluate_for_platform(&tpl, opts.platform.as_str())
+                    .map_err(|source| Error::Selector { path: t.clone(), source })?,
+            )
         }
         None => None,
     };

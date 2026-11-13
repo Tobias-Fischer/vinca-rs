@@ -35,6 +35,13 @@ pub enum Error {
         "rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:\n{0}"
     )]
     UnexplainedOverrides(String),
+    #[error("in {}", path.display())]
+    Selector {
+        path: PathBuf,
+        #[source]
+        #[diagnostic_source]
+        source: crate::selectors::Error,
+    },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -237,7 +244,7 @@ fn load_layers(path: &Path, platform: Subdir, seen: &mut Vec<PathBuf>) -> Result
     }
     seen.push(path.clone());
     let dir = path.parent().unwrap().to_path_buf();
-    let mut conf = match evaluate_for_platform(&load_yaml(&path)?, platform.as_str()) {
+    let mut conf = match selected(&path, platform)? {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     };
@@ -364,8 +371,13 @@ fn discover_tests(dir: &Path, distro: &str) -> (HashMap<String, PathBuf>, HashMa
     (tests, folders)
 }
 
+fn selected(path: &Path, platform: Subdir) -> Result<Value> {
+    evaluate_for_platform(&load_yaml(path)?, platform.as_str())
+        .map_err(|source| Error::Selector { path: path.to_path_buf(), source })
+}
+
 fn selected_mapping(path: &Path, platform: Subdir) -> Result<Mapping> {
-    Ok(match evaluate_for_platform(&load_yaml(path)?, platform.as_str()) {
+    Ok(match selected(path, platform)? {
         Value::Mapping(m) => m,
         _ => Mapping::new(),
     })
