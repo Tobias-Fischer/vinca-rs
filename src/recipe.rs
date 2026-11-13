@@ -27,16 +27,10 @@ pub const NATIVE: &str = "build_platform == target_platform";
 
 impl Req {
     pub fn cross(s: impl Into<String>) -> Self {
-        Req::If {
-            cond: CROSS.into(),
-            then: vec![s.into()],
-        }
+        Req::If { cond: CROSS.into(), then: vec![s.into()] }
     }
     pub fn native(s: impl Into<String>) -> Self {
-        Req::If {
-            cond: NATIVE.into(),
-            then: vec![s.into()],
-        }
+        Req::If { cond: NATIVE.into(), then: vec![s.into()] }
     }
     fn sort_key(&self) -> (u8, String) {
         match self {
@@ -57,7 +51,7 @@ impl Reqs {
     pub fn spec(&mut self, s: impl Into<String>) {
         self.push(Req::Spec(s.into()));
     }
-    pub fn extend<I: IntoIterator<Item = String>>(&mut self, specs: I) {
+    pub fn extend(&mut self, specs: impl IntoIterator<Item = impl Into<String>>) {
         for s in specs {
             self.spec(s);
         }
@@ -65,8 +59,8 @@ impl Reqs {
     pub fn contains(&self, s: &str) -> bool {
         self.0.contains(&Req::Spec(s.to_string()))
     }
-    pub fn remove(&mut self, r: &Req) -> bool {
-        self.0.shift_remove(r)
+    pub fn remove(&mut self, s: &str) -> bool {
+        self.0.shift_remove(&Req::Spec(s.to_string()))
     }
     pub fn sorted(mut self) -> Self {
         self.0.sort_by_key(Req::sort_key);
@@ -82,10 +76,7 @@ impl Reqs {
             .into_iter()
             .map(|r| match r {
                 Req::Spec(s) => Req::Spec(swap(&s)),
-                Req::If { cond, then } => Req::If {
-                    cond,
-                    then: then.iter().map(swap).collect(),
-                },
+                Req::If { cond, then } => Req::If { cond, then: then.iter().map(swap).collect() },
             })
             .collect();
     }
@@ -208,6 +199,21 @@ pub struct Recipe {
     pub tests: Vec<Value>,
     pub about: About,
     pub extra: Extra,
+}
+
+impl Recipe {
+    /// A recipe with an empty build script, i.e. of a package without content.
+    pub fn new(name: &str, version: &str, number: u64) -> Self {
+        Recipe {
+            package: Package { name: name.into(), version: version.into() },
+            source: None,
+            build: Build { number, string: None, script: Some(String::new()), post_process: vec![] },
+            requirements: Requirements::default(),
+            tests: vec![],
+            about: About::default(),
+            extra: Extra { recipe_maintainers: vec!["ros-forge".into()] },
+        }
+    }
 }
 
 /// Files that go next to a recipe.yaml.

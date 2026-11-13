@@ -5,38 +5,34 @@
 use std::collections::BTreeMap;
 
 use minijinja::{Environment, Value as JValue};
-use serde_yaml::{Mapping, Value};
+use serde_yaml::Value;
 
 pub fn platform_flags(platform: &str) -> BTreeMap<String, JValue> {
     let (os, arch) = platform.split_once('-').unwrap_or((platform, ""));
-    let mut f = BTreeMap::new();
-    let mut b = |k: &str, v: bool| {
-        f.insert(k.to_string(), JValue::from(v));
-    };
-    b("linux", os == "linux");
-    b("osx", os == "osx");
-    b("win", os == "win");
-    b("emscripten", os == "emscripten");
-    b("wasi", os == "wasi");
-    b("freebsd", os == "freebsd");
-    b("zos", os == "zos");
-    b(
-        "unix",
-        matches!(os, "linux" | "osx" | "emscripten" | "wasi" | "freebsd" | "zos"),
-    );
-    b("x86", matches!(arch, "32" | "64"));
-    b("x86_64", arch == "64");
-    b("aarch64", matches!(arch, "aarch64" | "arm64"));
-    b("arm64", matches!(arch, "aarch64" | "arm64"));
-    b("armV6l", arch == "armv6l");
-    b("armV7l", arch == "armv7l");
-    b("ppc64", arch == "ppc64");
-    b("ppc64le", arch == "ppc64le");
-    b("s390x", arch == "s390x");
-    b("riscv32", arch == "riscv32");
-    b("riscv64", arch == "riscv64");
-    b("wasm32", arch == "wasm32");
-    f.insert("target_platform".into(), JValue::from(platform));
+    let flags = [
+        ("linux", os == "linux"),
+        ("osx", os == "osx"),
+        ("win", os == "win"),
+        ("emscripten", os == "emscripten"),
+        ("wasi", os == "wasi"),
+        ("freebsd", os == "freebsd"),
+        ("zos", os == "zos"),
+        ("unix", matches!(os, "linux" | "osx" | "emscripten" | "wasi" | "freebsd" | "zos")),
+        ("x86", matches!(arch, "32" | "64")),
+        ("x86_64", arch == "64"),
+        ("aarch64", matches!(arch, "aarch64" | "arm64")),
+        ("arm64", matches!(arch, "aarch64" | "arm64")),
+        ("armV6l", arch == "armv6l"),
+        ("armV7l", arch == "armv7l"),
+        ("ppc64", arch == "ppc64"),
+        ("ppc64le", arch == "ppc64le"),
+        ("s390x", arch == "s390x"),
+        ("riscv32", arch == "riscv32"),
+        ("riscv64", arch == "riscv64"),
+        ("wasm32", arch == "wasm32"),
+    ];
+    let mut f: BTreeMap<String, JValue> = flags.into_iter().map(|(k, v)| (k.to_string(), v.into())).collect();
+    f.insert("target_platform".into(), platform.into());
     f
 }
 
@@ -44,42 +40,26 @@ pub fn platform_flags(platform: &str) -> BTreeMap<String, JValue> {
 /// expression is false (as in vinca).
 pub fn eval(expr: &str, ctx: &BTreeMap<String, JValue>) -> bool {
     let env = Environment::new();
-    env.compile_expression(expr)
-        .ok()
-        .and_then(|e| e.eval(ctx).ok())
-        .is_some_and(|v| v.is_true())
+    env.compile_expression(expr).ok().and_then(|e| e.eval(ctx).ok()).is_some_and(|v| v.is_true())
 }
 
 /// Resolve every selector for which `cond` returns `Some`; `None` keeps the node.
 pub fn process(node: &Value, cond: &dyn Fn(&str) -> Option<bool>) -> Option<Value> {
     match node {
-        Value::Mapping(m) if m.contains_key("if") && m.contains_key("then") => {
-            let expr = match &m["if"] {
-                Value::String(s) => s.clone(),
-                other => serde_yaml::to_string(other).unwrap_or_default(),
-            };
-            match cond(&expr) {
-                None => {
-                    let mut out = Mapping::new();
-                    for (k, v) in m {
-                        if let Some(v) = process(v, cond) {
-                            out.insert(k.clone(), v);
-                        }
-                    }
-                    Some(Value::Mapping(out))
-                }
-                Some(true) => process(&m["then"], cond),
-                Some(false) => m.get("else").and_then(|e| process(e, cond)),
-            }
-        }
         Value::Mapping(m) => {
-            let mut out = Mapping::new();
-            for (k, v) in m {
-                if let Some(v) = process(v, cond) {
-                    out.insert(k.clone(), v);
+            if m.contains_key("if") && m.contains_key("then") {
+                let expr = match &m["if"] {
+                    Value::String(s) => s.clone(),
+                    other => serde_yaml::to_string(other).unwrap_or_default(),
+                };
+                match cond(&expr) {
+                    Some(true) => return process(&m["then"], cond),
+                    Some(false) => return m.get("else").and_then(|e| process(e, cond)),
+                    None => {}
                 }
             }
-            Some(Value::Mapping(out))
+            let entries = m.iter().filter_map(|(k, v)| Some((k.clone(), process(v, cond)?)));
+            Some(Value::Mapping(entries.collect()))
         }
         Value::Sequence(seq) => {
             let mut out = Vec::new();
@@ -119,10 +99,7 @@ mod tests {
         )
         .unwrap();
         let linux = evaluate_for_platform(&v, "linux-aarch64");
-        assert_eq!(
-            linux["list"],
-            serde_yaml::from_str::<Value>("[a, b, c, e]").unwrap()
-        );
+        assert_eq!(linux["list"], serde_yaml::from_str::<Value>("[a, b, c, e]").unwrap());
         assert!(linux.get("key").is_none());
         let osx = evaluate_for_platform(&v, "osx-arm64");
         assert_eq!(osx["key"], Value::from("x"));

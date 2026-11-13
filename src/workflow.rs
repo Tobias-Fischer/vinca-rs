@@ -11,7 +11,7 @@
 //! a failure only skips the recipes that depend on it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -39,7 +39,17 @@ pub struct Options {
     /// the jobs run in stages that each wait for the whole previous one (e.g.
     /// fixed matrix slots), not only for their needs: schedule for that
     pub stage_barriers: bool,
+    /// workflow template: its jobs.build is copied for every job
+    pub template: Option<PathBuf>,
+    /// the GitHub Actions workflow to write (from the template)
+    pub out: Option<PathBuf>,
+    /// the jobs as JSON (`{"stages": [[{"id", "name", "recipes", "needs"}]]}`, a job's
+    /// stage being one more than its latest need's; RoboStack/vinca#201's format)
+    pub json: Option<PathBuf>,
 }
+
+/// Each job a list of recipes, built in order.
+type Jobs = Vec<Vec<String>>;
 
 struct Recipe {
     deps: BTreeSet<String>,
@@ -89,13 +99,7 @@ fn read_recipes(dir: &Path) -> Result<BTreeMap<String, Recipe>> {
             }
         }
         let script = r["build"].get("script").and_then(Value::as_str).unwrap_or("");
-        out.insert(
-            name,
-            Recipe {
-                deps,
-                trivial: script.is_empty(),
-            },
-        );
+        out.insert(name, Recipe { deps, trivial: script.is_empty() });
     }
     // only the recipes being built order the jobs
     let built: BTreeSet<String> = out.keys().cloned().collect();
@@ -184,11 +188,7 @@ impl<'a> Graph<'a> {
             .map(|n| {
                 let mut d: BTreeSet<String> = recipes[*n].deps.iter().map(lead).collect();
                 d.extend(
-                    followers
-                        .get(*n)
-                        .into_iter()
-                        .flatten()
-                        .flat_map(|f| recipes[f].deps.iter().map(lead)),
+                    followers.get(*n).into_iter().flatten().flat_map(|f| recipes[f].deps.iter().map(lead)),
                 );
                 d.remove(*n);
                 (*n, d)
@@ -209,40 +209,19 @@ impl<'a> Graph<'a> {
             if let Some(v) = memo.get(n) {
                 return *v;
             }
-            let tail = g
-                .get(n)
-                .into_iter()
-                .flatten()
-                .map(|m| rest(m, g, clock, memo))
-                .fold(0.0, f64::max);
+            let tail = g.get(n).into_iter().flatten().map(|m| rest(m, g, clock, memo)).fold(0.0, f64::max);
             let v = clock.secs(n) + tail;
             memo.insert(n.to_string(), v);
             v
         }
         let mut memo = HashMap::new();
-        let prio = sched
-            .iter()
-            .map(|n| (*n, rest(n, &dependents, clock, &mut memo)))
-            .collect();
-        Ok(Self {
-            followers,
-            sched,
-            deps,
-            dependents,
-            prio,
-        })
+        let prio = sched.iter().map(|n| (*n, rest(n, &dependents, clock, &mut memo))).collect();
+        Ok(Self { followers, sched, deps, dependents, prio })
     }
 
     /// The recipe's own time, its followers included.
     fn own(&self, p: &str, clock: &Clock) -> f64 {
-        clock.secs(p)
-            + self
-                .followers
-                .get(p)
-                .into_iter()
-                .flatten()
-                .map(|f| clock.secs(f))
-                .sum::<f64>()
+        clock.secs(p) + self.followers.get(p).into_iter().flatten().map(|f| clock.secs(f)).sum::<f64>()
     }
 
     /// Jobs of scheduled recipes, with their followers.
@@ -287,11 +266,7 @@ fn batch(
     while !ready.is_empty() {
         // the ready recipe with the most work after it
         let i = (0..ready.len())
-            .max_by(|&a, &b| {
-                prio[ready[a]]
-                    .total_cmp(&prio[ready[b]])
-                    .then(ready[b].cmp(ready[a]))
-            })
+            .max_by(|&a, &b| prio[ready[a]].total_cmp(&prio[ready[b]]).then(ready[b].cmp(ready[a])))
             .unwrap();
         let p = ready.swap_remove(i);
         let own = g.own(p, clock);
@@ -310,11 +285,7 @@ fn batch(
         let (j, end) = match best {
             Some((j, end)) if end <= fresh + slack => (j, end),
             _ => {
-                jobs.push(Job {
-                    recipes: vec![],
-                    start: at,
-                    end: at + clock.overhead,
-                });
+                jobs.push(Job { recipes: vec![], start: at, end: at + clock.overhead });
                 (jobs.len() - 1, fresh)
             }
         };
@@ -349,11 +320,7 @@ fn batch_staged(
     let (mut jobs, mut stages): (Vec<Vec<String>>, Vec<usize>) = (vec![], vec![]);
     let mut stage = 0;
     while !left.is_empty() {
-        let mut ready: Vec<&String> = left
-            .iter()
-            .copied()
-            .filter(|n| g.deps[*n].is_subset(&built))
-            .collect();
+        let mut ready: Vec<&String> = left.iter().copied().filter(|n| g.deps[*n].is_subset(&built)).collect();
         ready.sort_by(|a, b| g.prio[*b].total_cmp(&g.prio[*a]).then(a.cmp(b)));
         let work: f64 = ready.iter().map(|p| g.own(p, clock)).sum();
         let longest = ready.iter().map(|p| g.own(p, clock)).fold(0.0, f64::max);
@@ -448,48 +415,31 @@ fn job_name(job: &[String]) -> String {
     for p in job {
         let short = p
             .strip_prefix("ros2-")
-            .or_else(|| {
-                p.strip_prefix("ros-")
-                    .and_then(|r| r.split_once('-').map(|(_, s)| s))
-            })
+            .or_else(|| p.strip_prefix("ros-").and_then(|r| r.split_once('-').map(|(_, s)| s)))
             .unwrap_or(p);
         if !seen.contains(&short) {
             seen.push(short);
         }
     }
     let name = seen.join(" ");
-    if name.len() > 100 {
-        format!("{}…", &name[..name.floor_char_boundary(99)])
-    } else {
-        name
-    }
+    if name.len() > 100 { format!("{}…", &name[..name.floor_char_boundary(99)]) } else { name }
 }
 
-fn render(template: &Value, jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> Result<String> {
+fn render(template: &Value, jobs: &[Vec<String>], needs: &[BTreeSet<usize>]) -> Result<String> {
     let mut wf = template.clone();
     let job_tpl = wf["jobs"]["build"].clone();
     if !job_tpl.is_mapping() {
         bail!("the workflow template has no jobs.build");
     }
-    let owner: HashMap<&String, usize> = jobs
-        .iter()
-        .enumerate()
-        .flat_map(|(i, j)| j.iter().map(move |p| (p, i)))
-        .collect();
     let mut out = Mapping::new();
     for (i, job) in jobs.iter().enumerate() {
         let mut j = job_tpl.clone();
         substitute(&mut j, "@recipes@", &job.join(" "));
-        let needs: BTreeSet<usize> = job
-            .iter()
-            .flat_map(|p| recipes[p].deps.iter().map(|d| owner[d]))
-            .filter(|&o| o != i)
-            .collect();
         // name and needs first, then the template's keys
         let mut m = Mapping::new();
         m.insert("name".into(), job_name(job).into());
-        if !needs.is_empty() {
-            let needs: Vec<Value> = needs.into_iter().map(|n| format!("job_{n}").into()).collect();
+        if !needs[i].is_empty() {
+            let needs: Vec<Value> = needs[i].iter().map(|n| format!("job_{n}").into()).collect();
             m.insert("needs".into(), Value::Sequence(needs));
         }
         for (k, v) in j.as_mapping().unwrap() {
@@ -504,32 +454,20 @@ fn render(template: &Value, jobs: &[Vec<String>], recipes: &BTreeMap<String, Rec
     Ok(serde_yaml::to_string(&wf)?.replace("'on':", "on:"))
 }
 
-/// Where the workflow goes: a GitHub Actions workflow from a template, and/or the
-/// jobs as JSON (`{"stages": [[{"id", "name", "recipes", "needs"}]]}`, a job's
-/// stage being one more than its latest need's; RoboStack/vinca#201's format).
-pub struct Outputs<'a> {
-    pub template: Option<&'a Path>,
-    pub workflow: Option<&'a Path>,
-    pub json: Option<&'a Path>,
-}
-
 /// Write the outputs for the recipes; false when there is nothing to build.
-pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result<bool> {
+pub fn generate(recipes_dir: &Path, opts: &Options) -> Result<bool> {
     let recipes = read_recipes(recipes_dir)?;
     if recipes.is_empty() {
         return Ok(false);
     }
-    let template = match (outputs.template, outputs.workflow) {
+    let template = match (&opts.template, &opts.out) {
         (Some(t), Some(_)) => {
             let mut text = std::fs::read_to_string(t).with_context(|| t.display().to_string())?;
             text = text.replace("@platform@", &opts.platform);
             for (k, v) in &opts.vars {
                 text = text.replace(&format!("@{k}@"), v);
             }
-            Some(evaluate_for_platform(
-                &serde_yaml::from_str(&text)?,
-                &opts.platform,
-            ))
+            Some(evaluate_for_platform(&serde_yaml::from_str(&text)?, &opts.platform))
         }
         (None, Some(_)) => bail!("a workflow needs --template"),
         _ => None,
@@ -539,78 +477,47 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
     known.sort_by(f64::total_cmp);
     let clock = Clock {
         t: &opts.timings,
-        default: opts
-            .timings
-            .default
-            .or(known.get(known.len() / 2).copied())
-            .unwrap_or(20.0),
+        default: opts.timings.default.or(known.get(known.len() / 2).copied()).unwrap_or(20.0),
         overhead: opts.timings.job_overhead.unwrap_or(30.0),
-        runners: opts
-            .timings
-            .runners
-            .unwrap_or(if opts.platform.starts_with("osx") { 5 } else { 20 }),
+        runners: opts.timings.runners.unwrap_or(if opts.platform.starts_with("osx") { 5 } else { 20 }),
     };
     // the schedule that finishes first on the runners (and fits GitHub's size
     // limit): more slack, fewer and fuller jobs
-    // (simulated duration, how it was planned, jobs, their stages, workflow)
-    type Schedule = (f64, String, Vec<Vec<String>>, Vec<usize>, Option<String>);
-    let mut candidates: Vec<(String, Vec<Vec<String>>, Vec<usize>)> = vec![];
-    for slack in [
-        0.0,
-        30.0,
-        60.0,
-        120.0,
-        180.0,
-        300.0,
-        600.0,
-        1200.0,
-        2400.0,
-        3600.0,
-        f64::INFINITY,
-    ] {
+    // (simulated duration, how it was planned, jobs, their needs and stages, workflow)
+    type Schedule = (f64, String, Jobs, Vec<BTreeSet<usize>>, Vec<usize>, Option<String>);
+    // (how it was planned, jobs, their stages if not by their needs)
+    let mut candidates: Vec<(String, Jobs, Option<Vec<usize>>)> = vec![];
+    for slack in [0.0, 30.0, 60.0, 120.0, 180.0, 300.0, 600.0, 1200.0, 2400.0, 3600.0, f64::INFINITY] {
         let jobs = batch(&recipes, &clock, opts.max_batch, slack)?;
-        let stages = job_stages(&job_needs(&jobs, &recipes));
-        candidates.push((format!("clustered, slack {slack} s"), jobs, stages));
+        candidates.push((format!("clustered, slack {slack} s"), jobs, None));
     }
     if opts.stage_barriers {
         let (jobs, stages) = batch_staged(&recipes, &clock, opts.max_batch)?;
-        candidates.push(("stage by stage".into(), jobs, stages));
+        candidates.push(("stage by stage".into(), jobs, Some(stages)));
     }
     let mut best: Option<Schedule> = None;
     for (how, jobs, stages) in candidates {
-        let yaml = template
-            .as_ref()
-            .map(|t| render(t, &jobs, &recipes))
-            .transpose()?;
-        let span = simulate(&jobs, &stages, &recipes, &clock, opts.stage_barriers);
+        let needs = job_needs(&jobs, &recipes);
+        let stages = stages.unwrap_or_else(|| job_stages(&needs));
+        let yaml = template.as_ref().map(|t| render(t, &jobs, &needs)).transpose()?;
+        let span = simulate(&jobs, &stages, &needs, &clock, opts.stage_barriers);
         let size = yaml.as_ref().map_or(0, String::len);
         if std::env::var_os("VINCA_RS_DEBUG").is_some() {
-            eprintln!(
-                "{how}: {} jobs, {:.0} min, {} KiB",
-                jobs.len(),
-                span / 60.0,
-                size / 1024
-            );
+            eprintln!("{how}: {} jobs, {:.0} min, {} KiB", jobs.len(), span / 60.0, size / 1024);
         }
         if size <= MAX_WORKFLOW_BYTES && best.as_ref().is_none_or(|b| span < b.0) {
-            best = Some((span, how, jobs, stages, yaml));
+            best = Some((span, how, jobs, needs, stages, yaml));
         }
     }
-    let Some((span, how, jobs, stages, yaml)) = best else {
-        bail!(
-            "no schedule fits GitHub's {} KiB workflow limit: raise --max-batch",
-            MAX_WORKFLOW_BYTES / 1024
-        )
+    let Some((span, how, jobs, needs, stages, yaml)) = best else {
+        bail!("no schedule fits GitHub's {} KiB workflow limit: raise --max-batch", MAX_WORKFLOW_BYTES / 1024)
     };
-    if let (Some(out), Some(yaml)) = (outputs.workflow, &yaml) {
+    if let (Some(out), Some(yaml)) = (&opts.out, &yaml) {
         std::fs::write(out, yaml).with_context(|| out.display().to_string())?;
     }
-    if let Some(out) = outputs.json {
-        std::fs::write(
-            out,
-            serde_json::to_string_pretty(&stages_json(&jobs, &stages, &recipes))?,
-        )
-        .with_context(|| out.display().to_string())?;
+    if let Some(out) = &opts.json {
+        std::fs::write(out, serde_json::to_string_pretty(&stages_json(&jobs, &stages, &needs))?)
+            .with_context(|| out.display().to_string())?;
     }
     eprintln!(
         "{} recipes in {} jobs ({how}): {:.0} min on {} runners (estimate){}",
@@ -618,25 +525,18 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
         jobs.len(),
         span / 60.0,
         clock.runners,
-        yaml.map(|y| format!("; {} KiB", y.len() / 1024))
-            .unwrap_or_default()
+        yaml.map(|y| format!("; {} KiB", y.len() / 1024)).unwrap_or_default()
     );
     Ok(true)
 }
 
 fn job_needs(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> Vec<BTreeSet<usize>> {
-    let owner: HashMap<&String, usize> = jobs
-        .iter()
-        .enumerate()
-        .flat_map(|(i, j)| j.iter().map(move |p| (p, i)))
-        .collect();
+    let owner: HashMap<&String, usize> =
+        jobs.iter().enumerate().flat_map(|(i, j)| j.iter().map(move |p| (p, i))).collect();
     jobs.iter()
         .enumerate()
         .map(|(i, j)| {
-            j.iter()
-                .flat_map(|p| recipes[p].deps.iter().map(|d| owner[d]))
-                .filter(|&o| o != i)
-                .collect()
+            j.iter().flat_map(|p| recipes[p].deps.iter().map(|d| owner[d])).filter(|&o| o != i).collect()
         })
         .collect()
 }
@@ -647,11 +547,7 @@ fn job_stages(needs: &[BTreeSet<usize>]) -> Vec<usize> {
         if let Some(s) = memo[i] {
             return s;
         }
-        let s = needs[i]
-            .iter()
-            .map(|&n| stage_of(n, needs, memo) + 1)
-            .max()
-            .unwrap_or(0);
+        let s = needs[i].iter().map(|&n| stage_of(n, needs, memo) + 1).max().unwrap_or(0);
         memo[i] = Some(s);
         s
     }
@@ -659,12 +555,7 @@ fn job_stages(needs: &[BTreeSet<usize>]) -> Vec<usize> {
     (0..needs.len()).map(|i| stage_of(i, needs, &mut memo)).collect()
 }
 
-fn stages_json(
-    jobs: &[Vec<String>],
-    stage: &[usize],
-    recipes: &BTreeMap<String, Recipe>,
-) -> serde_json::Value {
-    let needs = job_needs(jobs, recipes);
+fn stages_json(jobs: &[Vec<String>], stage: &[usize], needs: &[BTreeSet<usize>]) -> serde_json::Value {
     // ids as RoboStack/vinca#201 writes them: stage_<stage>_job_<index in the stage>
     let mut id = vec![String::new(); jobs.len()];
     let mut count = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
@@ -689,11 +580,10 @@ fn stages_json(
 fn simulate(
     jobs: &[Vec<String>],
     stage: &[usize],
-    recipes: &BTreeMap<String, Recipe>,
+    needs: &[BTreeSet<usize>],
     clock: &Clock,
     barriers: bool,
 ) -> f64 {
-    let needs = job_needs(jobs, recipes);
     let mut open_in_stage = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
     for &s in stage {
         open_in_stage[s] += 1;
@@ -718,9 +608,7 @@ fn simulate(
                 running.push((now + clock.job(&jobs[i]), i));
             }
         }
-        let k = (0..running.len())
-            .min_by(|&a, &b| running[a].0.total_cmp(&running[b].0))
-            .unwrap();
+        let k = (0..running.len()).min_by(|&a, &b| running[a].0.total_cmp(&running[b].0)).unwrap();
         let (t, i) = running.swap_remove(k);
         now = t;
         done[i] = true;
@@ -734,49 +622,35 @@ fn simulate(
 mod tests {
     use super::*;
 
-    fn r(deps: &[&str], trivial: bool) -> Recipe {
-        Recipe {
-            deps: deps.iter().map(|s| s.to_string()).collect(),
-            trivial,
-        }
+    /// (name, dependencies, trivial)
+    fn recipes(list: &[(&str, &[&str], bool)]) -> BTreeMap<String, Recipe> {
+        let recipe =
+            |deps: &[&str], trivial| Recipe { deps: deps.iter().map(|s| s.to_string()).collect(), trivial };
+        list.iter().map(|(n, deps, trivial)| (n.to_string(), recipe(deps, *trivial))).collect()
+    }
+
+    fn timings(secs: &[(&str, f64)]) -> Timings {
+        Timings { recipes: secs.iter().map(|(n, s)| (n.to_string(), *s)).collect(), ..Default::default() }
     }
 
     #[test]
     fn cycle_is_an_error() {
-        let recipes = BTreeMap::from([
-            ("a".to_string(), r(&["b"], false)),
-            ("b".to_string(), r(&["a"], false)),
-        ]);
+        let recipes = recipes(&[("a", &["b"], false), ("b", &["a"], false)]);
         assert!(levels(&recipes).unwrap_err().to_string().contains("cycle"));
     }
 
     #[test]
     fn needs_only_the_dependencies_jobs() {
         // a <- b, c independent; a and c are slow, so they get their own jobs
-        let recipes = BTreeMap::from([
-            ("a".to_string(), r(&[], false)),
-            ("b".to_string(), r(&["a"], false)),
-            ("c".to_string(), r(&[], false)),
-        ]);
-        let t = Timings {
-            recipes: HashMap::from([("a".into(), 600.0), ("b".into(), 600.0), ("c".into(), 600.0)]),
-            ..Default::default()
-        };
-        let clock = Clock {
-            t: &t,
-            default: 600.0,
-            overhead: 30.0,
-            runners: 20,
-        };
+        let recipes = recipes(&[("a", &[], false), ("b", &["a"], false), ("c", &[], false)]);
+        let t = timings(&[("a", 600.0), ("b", 600.0), ("c", 600.0)]);
+        let clock = Clock { t: &t, default: 600.0, overhead: 30.0, runners: 20 };
         let jobs = batch(&recipes, &clock, 5, 0.0).unwrap();
         // b after a in a's job (no new job overhead); c in parallel
-        assert_eq!(
-            jobs,
-            vec![vec!["a".to_string(), "b".to_string()], vec!["c".to_string()]]
-        );
+        assert_eq!(jobs, [vec!["a", "b"], vec!["c"]]);
         let tpl: Value =
             serde_yaml::from_str("on: push\njobs:\n  build:\n    steps: [{run: 'build @recipes@'}]").unwrap();
-        let yaml = render(&tpl, &jobs, &recipes).unwrap();
+        let yaml = render(&tpl, &jobs, &job_needs(&jobs, &recipes)).unwrap();
         let wf: Value = serde_yaml::from_str(&yaml).unwrap();
         assert!(wf["jobs"]["job_0"].get("needs").is_none());
         assert!(wf["jobs"]["job_1"].get("needs").is_none());
@@ -787,40 +661,17 @@ mod tests {
     #[test]
     fn dependent_on_two_jobs_waits_for_both() {
         // d needs a and c, which run in parallel: d goes after the later one
-        let recipes = BTreeMap::from([
-            ("a".to_string(), r(&[], false)),
-            ("c".to_string(), r(&[], false)),
-            ("d".to_string(), r(&["a", "c"], false)),
-        ]);
-        let t = Timings {
-            recipes: HashMap::from([("a".into(), 600.0), ("c".into(), 300.0), ("d".into(), 60.0)]),
-            ..Default::default()
-        };
-        let clock = Clock {
-            t: &t,
-            default: 60.0,
-            overhead: 30.0,
-            runners: 20,
-        };
-        let jobs = batch(&recipes, &clock, 5, 0.0).unwrap();
-        assert_eq!(
-            jobs,
-            vec![
-                vec!["a".to_string()],
-                vec!["c".to_string()],
-                vec!["d".to_string()]
-            ]
-        );
+        let recipes = recipes(&[("a", &[], false), ("c", &[], false), ("d", &["a", "c"], false)]);
+        let t = timings(&[("a", 600.0), ("c", 300.0), ("d", 60.0)]);
+        let clock = Clock { t: &t, default: 60.0, overhead: 30.0, runners: 20 };
+        assert_eq!(batch(&recipes, &clock, 5, 0.0).unwrap(), [vec!["a"], vec!["c"], vec!["d"]]);
     }
 
     #[test]
     fn json_stages_use_vinca_ids() {
-        let recipes = BTreeMap::from([
-            ("a".to_string(), r(&[], false)),
-            ("b".to_string(), r(&["a"], false)),
-        ]);
+        let recipes = recipes(&[("a", &[], false), ("b", &["a"], false)]);
         let jobs = vec![vec!["a".to_string()], vec!["b".to_string()]];
-        let j = stages_json(&jobs, &[0, 1], &recipes);
+        let j = stages_json(&jobs, &[0, 1], &job_needs(&jobs, &recipes));
         assert_eq!(j["stages"][0][0]["id"], "stage_0_job_0");
         assert_eq!(j["stages"][1][0]["id"], "stage_1_job_0");
         assert_eq!(j["stages"][1][0]["needs"], serde_json::json!(["stage_0_job_0"]));
@@ -829,20 +680,9 @@ mod tests {
 
     #[test]
     fn aliases_follow_their_package() {
-        let recipes = BTreeMap::from([
-            ("ros2-x".to_string(), r(&[], false)),
-            ("ros-humble-x".to_string(), r(&["ros2-x"], true)),
-        ]);
+        let recipes = recipes(&[("ros2-x", &[], false), ("ros-humble-x", &["ros2-x"], true)]);
         let t = Timings::default();
-        let clock = Clock {
-            t: &t,
-            default: 20.0,
-            overhead: 30.0,
-            runners: 20,
-        };
-        assert_eq!(
-            batch(&recipes, &clock, 5, 0.0).unwrap(),
-            vec![vec!["ros2-x".to_string(), "ros-humble-x".to_string()]]
-        );
+        let clock = Clock { t: &t, default: 20.0, overhead: 30.0, runners: 20 };
+        assert_eq!(batch(&recipes, &clock, 5, 0.0).unwrap(), [vec!["ros2-x", "ros-humble-x"]]);
     }
 }

@@ -11,23 +11,16 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
 use rattler_build_recipe::RenderConfig;
-use rattler_conda_types::Subdir;
+use rattler_conda_types::{PackageRecord, Subdir};
 use rayon::prelude::*;
 
 pub type Build = (String, String, String);
 
-struct Record {
-    name: String,
-    version: String,
-    build: String,
-    depends: Vec<String>,
-}
-
 /// ROS 2 packages share their names across distributions (ros2-*): only builds
 /// for this distribution (its mutex, or the mutex's build string) count.
-fn built_for_distro(r: &Record, distro: &str) -> bool {
-    if r.name.ends_with("distro-mutex") {
-        return r.build.starts_with(&format!("{distro}_"));
+fn built_for_distro(r: &PackageRecord, distro: &str) -> bool {
+    if r.name.as_normalized().ends_with("distro-mutex") {
+        return r.build.to_string().starts_with(&format!("{distro}_"));
     }
     let mutexes: Vec<&String> = r
         .depends
@@ -35,9 +28,7 @@ fn built_for_distro(r: &Record, distro: &str) -> bool {
         .filter(|d| d.split(' ').next().unwrap_or_default().ends_with("distro-mutex"))
         .collect();
     mutexes.is_empty()
-        || mutexes
-            .iter()
-            .any(|d| d.contains(&format!(" {distro}_")) || d.ends_with(&format!(" {distro}")))
+        || mutexes.iter().any(|d| d.contains(&format!(" {distro}_")) || d.ends_with(&format!(" {distro}")))
 }
 
 /// (name, version, build string) of the builds of `names` for `distro` on the
@@ -59,32 +50,18 @@ pub fn published(
         .iter()
         .map(|c| Ok(Channel::from_url(url::Url::parse(c).with_context(|| c.clone())?)))
         .collect::<Result<_>>()?;
-    let names: Vec<PackageName> = names
-        .iter()
-        .filter_map(|n| PackageName::from_str(n).ok())
-        .collect();
+    let names: Vec<PackageName> = names.iter().filter_map(|n| PackageName::from_str(n).ok()).collect();
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let output = runtime.block_on(async {
-        Gateway::new()
-            .query(channels, [subdir, Subdir::NoArch], names)
-            .recursive(false)
-            .await
+        Gateway::new().query(channels, [subdir, Subdir::NoArch], names).recursive(false).await
     })?;
     Ok(output
         .repodata
         .iter()
         .flat_map(|repodata| repodata.iter())
-        .map(|r| {
-            let p = &r.package_record;
-            Record {
-                name: p.name.as_normalized().to_string(),
-                version: p.version.to_string(),
-                build: p.build.to_string(),
-                depends: p.depends.clone(),
-            }
-        })
-        .filter(|r| built_for_distro(r, distro))
-        .map(|r| (r.name, r.version, r.build))
+        .map(|r| &r.package_record)
+        .filter(|p| built_for_distro(p, distro))
+        .map(|p| (p.name.as_normalized().to_string(), p.version.to_string(), p.build.to_string()))
         .collect())
 }
 

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use indexmap::{IndexMap, IndexSet};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
@@ -44,19 +45,13 @@ pub struct MutexPackage {
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct DepMods {
-    #[serde(default)]
     pub add_build: Vec<Value>,
-    #[serde(default)]
     pub add_host: Vec<Value>,
-    #[serde(default)]
     pub add_run: Vec<Value>,
-    #[serde(default)]
     pub remove_build: Vec<Value>,
-    #[serde(default)]
     pub remove_host: Vec<Value>,
-    #[serde(default)]
     pub remove_run: Vec<Value>,
 }
 
@@ -72,13 +67,12 @@ pub struct DummyPackage {
 #[derive(Debug, Deserialize, Clone, Default, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PkgAdditionalInfo {
-    #[serde(default)]
     pub additional_cmake_args: Option<String>,
     pub build_number: Option<u64>,
     pub generate_dummy_package_with_run_deps: Option<DummyPackage>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotEntry {
     pub url: String,
@@ -119,13 +113,16 @@ pub enum PlatformList {
 
 pub type CondaIndex = HashMap<String, CondaIndexEntry>;
 
+pub type Patches = HashMap<String, HashMap<String, Vec<PathBuf>>>;
+
+/// The merged `vinca.yaml` layers, and what is read next to them.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct VincaYaml {
-    ros_distro: String,
-    build_number: Option<u64>,
+pub struct Config {
+    pub ros_distro: String,
+    pub build_number: Option<u64>,
     #[serde(default)]
-    package_name_mode: PackageNameMode,
+    pub package_name_mode: PackageNameMode,
     // validated here, read per layer (relative to each file)
     #[serde(default)]
     #[allow(dead_code)]
@@ -134,53 +131,49 @@ struct VincaYaml {
     patch_dir: Option<String>,
     rosdistro_snapshot: Option<String>,
     rosdistro_additional_recipes: Option<String>,
-    mutex_package: Option<MutexPackage>,
+    pub mutex_package: Option<MutexPackage>,
+    /// without the excluded and skipped packages (`read` drops them)
     #[serde(default)]
-    packages_select_by_deps: Vec<String>,
+    pub packages_select_by_deps: Vec<String>,
+    /// not built, and dropped from the other packages' dependencies
     #[serde(default)]
-    packages_exclude: Vec<String>,
+    pub packages_exclude: Vec<String>,
+    /// not built (nor walked through for dependencies)
     #[serde(default)]
-    packages_skip: Vec<String>,
+    pub packages_skip: Vec<String>,
     #[serde(default)]
-    skip_existing: Vec<String>,
+    pub skip_existing: Vec<String>,
     /// only packages with Python content get Python in host/run (and with it the
     /// Python variants); the others are built once
     #[serde(default)]
-    conditional_python_dependency: bool,
-    // read by the CI workflow generator, which moves to the monorepo
-    #[allow(dead_code)]
-    setup_pixi_version: Option<String>,
-    #[allow(dead_code)]
-    pixi_version: Option<String>,
-}
+    pub conditional_python_dependency: bool,
+    // accepted for RoboStack's own CI tooling (its shared vinca.yaml sets them)
+    #[serde(default, rename = "setup_pixi_version")]
+    _setup_pixi_version: IgnoredAny,
+    #[serde(default, rename = "pixi_version")]
+    _pixi_version: IgnoredAny,
 
-// ----------------------------------------------------------------------------
-// the configuration vinca-rs works with
-// ----------------------------------------------------------------------------
-
-pub type Patches = HashMap<String, HashMap<String, Vec<PathBuf>>>;
-
-pub struct Config {
+    // not keys of vinca.yaml: filled in by `read`
+    #[serde(skip)]
     pub platform: String,
-    pub ros_distro: String,
-    pub build_number: u64,
-    pub name_mode: PackageNameMode,
-    pub select_by_deps: Vec<String>,
-    pub skip_by_deps: Vec<String>,
-    pub remove_from_deps: Vec<String>,
+    #[serde(skip)]
     pub patches: Patches,
+    #[serde(skip)]
     pub tests: HashMap<String, PathBuf>,
+    #[serde(skip)]
     pub test_folders: HashMap<String, PathBuf>,
+    #[serde(skip)]
     pub depmods: HashMap<String, DepMods>,
+    #[serde(skip)]
     pub additional_info: HashMap<String, PkgAdditionalInfo>,
     /// conda_index files, the extending configuration's first
+    #[serde(skip)]
     pub conda_indexes: Vec<CondaIndex>,
-    pub mutex: Option<MutexPackage>,
     /// rosdistro snapshot + additional recipes (which win)
+    #[serde(skip)]
     pub snapshot: IndexMap<String, SnapshotEntry>,
+    #[serde(skip)]
     pub additional: IndexMap<String, SnapshotEntry>,
-    pub skip_existing: Vec<String>,
-    pub conditional_python: bool,
 }
 
 pub fn load_yaml(path: &Path) -> Result<Value> {
@@ -211,9 +204,7 @@ fn unique(v: impl IntoIterator<Item = String>) -> Vec<String> {
 }
 
 fn load_layers(path: &Path, platform: &str, seen: &mut Vec<PathBuf>) -> Result<Vec<(PathBuf, Mapping)>> {
-    let path = path
-        .canonicalize()
-        .with_context(|| format!("{}", path.display()))?;
+    let path = path.canonicalize().with_context(|| format!("{}", path.display()))?;
     if seen.contains(&path) {
         bail!("vinca.yaml extends itself: {}", path.display());
     }
@@ -252,17 +243,12 @@ fn merge_configs(base: &mut Mapping, own: &Mapping) {
         let key = k.as_str().unwrap_or_default();
         if LAYERED_LISTS.contains(&key) {
             let merged = unique(names(base.get(k)).into_iter().chain(names(Some(v))));
-            base.insert(
-                k.clone(),
-                Value::Sequence(merged.into_iter().map(Value::String).collect()),
-            );
+            base.insert(k.clone(), Value::Sequence(merged.into_iter().map(Value::String).collect()));
         } else if key == "mutex_package" && base.get(k).is_some_and(Value::is_mapping) {
             let b = base[k].as_mapping().unwrap().clone();
             let o = v.as_mapping().cloned().unwrap_or_default();
             let mut merged = b.clone();
-            for (kk, vv) in &o {
-                merged.insert(kk.clone(), vv.clone());
-            }
+            merged.extend(o.clone());
             let mine = names(o.get("run_constraints"));
             let mine_names: Vec<_> = mine.iter().map(|c| constraint_name(c)).collect();
             let rc: Vec<Value> = names(b.get("run_constraints"))
@@ -282,15 +268,10 @@ fn merge_configs(base: &mut Mapping, own: &Mapping) {
 /// Per-package files: the extending layer's keys of a package's entry win.
 fn merge_per_package(base: &mut Mapping, own: &Mapping) {
     for (pkg, entry) in own {
-        match (base.get_mut(pkg), entry) {
-            (Some(Value::Mapping(b)), Value::Mapping(e)) => {
-                for (k, v) in e {
-                    b.insert(k.clone(), v.clone());
-                }
-            }
-            _ => {
-                base.insert(pkg.clone(), entry.clone());
-            }
+        if let (Some(Value::Mapping(b)), Value::Mapping(e)) = (base.get_mut(pkg), entry) {
+            b.extend(e.clone());
+        } else {
+            base.insert(pkg.clone(), entry.clone());
         }
     }
 }
@@ -305,11 +286,7 @@ fn add_name_variants<T: Clone>(entries: &mut HashMap<String, T>, distro: &str) {
             .or_else(|| name.strip_prefix("ros-"))
             .unwrap_or(&name)
             .to_string();
-        for v in [
-            format!("{legacy}{short}"),
-            format!("ros-{short}"),
-            format!("ros2-{short}"),
-        ] {
+        for v in [format!("{legacy}{short}"), format!("ros-{short}"), format!("ros2-{short}")] {
             entries.entry(v).or_insert_with(|| value.clone());
         }
     }
@@ -326,12 +303,7 @@ fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
     for path in files {
         let fname = path.file_name().unwrap().to_string_lossy().to_string();
         let parts: Vec<&str> = fname.split('.').collect();
-        let entry = patches.entry(parts[0].to_string()).or_insert_with(|| {
-            std::iter::once("any")
-                .chain(PATCH_PLATFORMS)
-                .map(|p| (p.to_string(), vec![]))
-                .collect()
-        });
+        let entry = patches.entry(parts[0].to_string()).or_default();
         let dest: Vec<&str> = if parts.len() == 3 && PATCH_PLATFORMS.contains(&parts[1]) {
             vec![parts[1]]
         } else if parts.len() == 3 && parts[1] == "unix" {
@@ -340,7 +312,7 @@ fn discover_patches(dir: &Path, distro: &str) -> Result<Patches> {
             vec!["any"]
         };
         for p in dest {
-            entry.get_mut(p).unwrap().push(path.clone());
+            entry.entry(p.to_string()).or_default().push(path.clone());
         }
     }
     add_name_variants(&mut patches, distro);
@@ -378,36 +350,26 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
     for (_, layer) in &layers {
         merge_configs(&mut merged, layer);
     }
-    let conf: VincaYaml = typed(Value::Mapping(merged), path)?;
+    let mut conf: Config = typed(Value::Mapping(merged), path)?;
+    conf.platform = platform.to_string();
+    let dropped: Vec<String> =
+        conf.packages_exclude.iter().chain(&conf.packages_skip).map(|n| n.replace('-', "_")).collect();
+    conf.packages_select_by_deps.retain(|n| !dropped.contains(&n.replace('-', "_")));
 
-    let exclude = unique(conf.packages_exclude.clone());
-    let skip = unique(conf.packages_skip.clone());
-    let dropped: Vec<String> = exclude.iter().chain(&skip).map(|n| n.replace('-', "_")).collect();
-    let select_by_deps = conf
-        .packages_select_by_deps
-        .iter()
-        .filter(|n| !dropped.contains(&n.replace('-', "_")))
-        .cloned()
-        .collect();
-
-    let mut patches = Patches::new();
-    let mut tests = HashMap::new();
-    let mut test_folders = HashMap::new();
     let mut depmods = Mapping::new();
     let mut additional_info = Mapping::new();
-    let mut conda_indexes: Vec<CondaIndex> = vec![];
     for (dir, layer) in &layers {
         if let Some(Value::String(pd)) = layer.get("patch_dir") {
             let pd = PathBuf::from(pd);
-            patches.extend(discover_patches(&pd, &conf.ros_distro)?);
+            conf.patches.extend(discover_patches(&pd, &conf.ros_distro)?);
             let deps = pd.join("dependencies.yaml");
             if deps.exists() {
                 merge_per_package(&mut depmods, &selected_mapping(&deps, platform)?);
             }
         }
         let (t, f) = discover_tests(dir, &conf.ros_distro);
-        tests.extend(t);
-        test_folders.extend(f);
+        conf.tests.extend(t);
+        conf.test_folders.extend(f);
         let info = dir.join("pkg_additional_info.yaml");
         if info.exists() {
             merge_per_package(&mut additional_info, &selected_mapping(&info, platform)?);
@@ -420,9 +382,11 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
             }
             layer_indexes.push(typed::<CondaIndex>(load_yaml(&p)?, &p)?);
         }
-        layer_indexes.extend(conda_indexes);
-        conda_indexes = layer_indexes;
+        layer_indexes.append(&mut conf.conda_indexes);
+        conf.conda_indexes = layer_indexes;
     }
+    conf.depmods = typed(Value::Mapping(depmods), Path::new("patch/dependencies.yaml"))?;
+    conf.additional_info = typed(Value::Mapping(additional_info), Path::new("pkg_additional_info.yaml"))?;
 
     let load_snapshot = |p: &Option<String>| -> Result<IndexMap<String, SnapshotEntry>> {
         Ok(match p {
@@ -430,39 +394,11 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
             None => IndexMap::new(),
         })
     };
-    let mut snapshot = load_snapshot(&conf.rosdistro_snapshot)?;
-    let additional = load_snapshot(&conf.rosdistro_additional_recipes)?;
-    check_overrides(&snapshot, &additional)?;
-    snapshot.extend(additional.clone());
-
-    let mut mutex = conf.mutex_package.clone();
-    if let Some(m) = &mut mutex {
-        m.build_number.get_or_insert(conf.build_number.unwrap_or(1));
-    }
-
-    Ok(Config {
-        platform: platform.to_string(),
-        ros_distro: conf.ros_distro,
-        build_number: conf.build_number.unwrap_or(0),
-        name_mode: conf.package_name_mode,
-        skip_by_deps: unique(exclude.iter().chain(&skip).cloned()),
-        remove_from_deps: exclude,
-        select_by_deps,
-        patches,
-        tests,
-        test_folders,
-        depmods: typed(Value::Mapping(depmods), Path::new("patch/dependencies.yaml"))?,
-        additional_info: typed(
-            Value::Mapping(additional_info),
-            Path::new("pkg_additional_info.yaml"),
-        )?,
-        conda_indexes,
-        mutex,
-        snapshot,
-        additional,
-        skip_existing: conf.skip_existing,
-        conditional_python: conf.conditional_python_dependency,
-    })
+    conf.snapshot = load_snapshot(&conf.rosdistro_snapshot)?;
+    conf.additional = load_snapshot(&conf.rosdistro_additional_recipes)?;
+    check_overrides(&conf.snapshot, &conf.additional)?;
+    conf.snapshot.extend(conf.additional.clone());
+    Ok(conf)
 }
 
 /// An additional recipe that replaces a released package must say why
@@ -511,11 +447,7 @@ impl Config {
     /// ROS name without distro prefix, with underscores.
     pub fn short_name(&self, name: &str) -> String {
         let n = name.replace('-', "_");
-        for p in [
-            "ros2_".to_string(),
-            format!("ros_{}_", self.ros_distro),
-            "ros_".to_string(),
-        ] {
+        for p in ["ros2_".to_string(), format!("ros_{}_", self.ros_distro), "ros_".to_string()] {
             if let Some(s) = n.strip_prefix(&p) {
                 return s.to_string();
             }
@@ -533,8 +465,8 @@ impl Config {
             .unwrap_or_default()
     }
 
-    pub fn build_number_for(&self, default: u64, name: &str) -> u64 {
-        self.info(name).build_number.unwrap_or(default)
+    pub fn build_number_for(&self, name: &str) -> u64 {
+        self.info(name).build_number.or(self.build_number).unwrap_or(0)
     }
 
     pub fn is_dummy(&self, name: &str) -> bool {
@@ -546,12 +478,7 @@ impl Config {
             return vec![];
         };
         let os = self.platform.split('-').next().unwrap_or_default();
-        p.get("any")
-            .into_iter()
-            .flatten()
-            .chain(p.get(os).into_iter().flatten())
-            .cloned()
-            .collect()
+        p.get("any").into_iter().flatten().chain(p.get(os).into_iter().flatten()).cloned().collect()
     }
 }
 
@@ -564,13 +491,9 @@ mod tests {
             url: "https://github.com/x/y.git".into(),
             version: version.into(),
             tag: Some("t".into()),
-            rev: None,
             dependencies: Some(vec![]),
-            repository: None,
-            additional_folder: String::new(),
-            package_xml_name: None,
-            submodules: None,
             override_reason: reason.map(String::from),
+            ..Default::default()
         }
     }
 
@@ -579,10 +502,7 @@ mod tests {
         let snapshot = IndexMap::from([("pkg".to_string(), entry("1.7.2", None))]);
         let silent = IndexMap::from([("pkg".to_string(), entry("1.4.2", None))]);
         let err = check_overrides(&snapshot, &silent).unwrap_err().to_string();
-        assert!(
-            err.contains("pkg: released 1.7.2") && err.contains("the release is newer"),
-            "{err}"
-        );
+        assert!(err.contains("pkg: released 1.7.2") && err.contains("the release is newer"), "{err}");
         let explained = IndexMap::from([("pkg".to_string(), entry("1.4.2", Some("fork with a fix")))]);
         check_overrides(&snapshot, &explained).unwrap();
         let other = IndexMap::from([("new_pkg".to_string(), entry("1.0.0", None))]);

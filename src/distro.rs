@@ -90,6 +90,7 @@ fn releases_of(files: &[DistributionFile]) -> HashMap<String, LiveRelease> {
                 continue;
             };
             let pkgs = rel.packages.clone().unwrap_or_else(|| vec![repo_name.clone()]);
+            let upstream = version.split('-').next().unwrap();
             for pkg in pkgs {
                 let tag = rel
                     .tags
@@ -98,13 +99,13 @@ fn releases_of(files: &[DistributionFile]) -> HashMap<String, LiveRelease> {
                     .unwrap_or_else(|| "release/{package}/{version}".into())
                     .replace("{package}", &pkg)
                     .replace("{version}", version)
-                    .replace("{upstream_version}", version.split('-').next().unwrap());
+                    .replace("{upstream_version}", upstream);
                 live.insert(
                     pkg,
                     LiveRelease {
                         url: url.clone(),
                         tag,
-                        version: version.split('-').next().unwrap().to_string(),
+                        version: upstream.to_string(),
                         source_url: repo.source.as_ref().and_then(|s| s.url.clone()),
                     },
                 );
@@ -112,6 +113,23 @@ fn releases_of(files: &[DistributionFile]) -> HashMap<String, LiveRelease> {
         }
     }
     live
+}
+
+/// The URL without a trailing `.git`.
+pub fn strip_git(url: &str) -> String {
+    url.strip_suffix(".git").unwrap_or(url).to_string()
+}
+
+/// A bloom release repository (`<name>-release`): never a package's upstream.
+pub fn is_release_repo(url: &str) -> bool {
+    let base = url.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_lowercase();
+    let base = base.strip_suffix(".git").unwrap_or(&base);
+    base.ends_with("-release") || base.ends_with("_release")
+}
+
+/// A package.xml, parsed (pixi-build-ros) with its conditions evaluated.
+pub fn parse_package(xml: &str, pkg: &str, env: &HashMap<String, String>) -> Result<PackageXml> {
+    Ok(PackageXml::parse(xml).map_err(|e| anyhow!("{pkg}: {e}"))?.evaluate_conditions(env))
 }
 
 pub fn client() -> Result<reqwest::blocking::Client> {
@@ -129,10 +147,8 @@ impl Rosdistro {
     /// cached package.xml files of releases that didn't change.
     pub fn load(client: &reqwest::blocking::Client, name: &str, rosdistro_ref: Option<&str>) -> Result<Self> {
         let index: Index = serde_yaml::from_str(&get(client, INDEX_URL)?.text()?)?;
-        let info = index
-            .distributions
-            .get(name)
-            .with_context(|| format!("{name} is not in the rosdistro index"))?;
+        let info =
+            index.distributions.get(name).with_context(|| format!("{name} is not in the rosdistro index"))?;
         let mut gz = Vec::new();
         get(client, &info.distribution_cache)?.read_to_end(&mut gz)?;
         let mut text = String::new();
@@ -153,14 +169,8 @@ impl Rosdistro {
             let mut files = vec![];
             for u in urls {
                 // relative to the index, i.e. the files of the same ref
-                let u = if u.contains("://") {
-                    u
-                } else {
-                    format!("{ROSDISTRO_RAW}/{r}/{u}")
-                };
-                files.push(serde_yaml::from_str::<DistributionFile>(
-                    &get(client, &u)?.text()?,
-                )?);
+                let u = if u.contains("://") { u } else { format!("{ROSDISTRO_RAW}/{r}/{u}") };
+                files.push(serde_yaml::from_str::<DistributionFile>(&get(client, &u)?.text()?)?);
             }
             let at_ref = releases_of(&files);
             xmls.retain(|pkg, _| at_ref.get(pkg).is_some_and(|rel| releases.get(pkg) == Some(rel)));
@@ -179,21 +189,12 @@ impl Rosdistro {
         if let Some(x) = self.xmls.get(pkg) {
             return Ok(x.clone());
         }
-        let rel = self
-            .releases
-            .get(pkg)
-            .with_context(|| format!("{pkg} is not released"))?;
+        let rel = self.releases.get(pkg).with_context(|| format!("{pkg} is not released"))?;
         let entry = SnapshotEntry {
             url: rel.url.clone(),
             version: rel.version.clone(),
             tag: Some(rel.tag.clone()),
-            rev: None,
-            dependencies: None,
-            repository: None,
-            additional_folder: String::new(),
-            package_xml_name: None,
-            submodules: None,
-            override_reason: None,
+            ..Default::default()
         };
         Ok(get(client, &Distro::raw_url(&entry)?)?.text()?)
     }
@@ -259,10 +260,8 @@ impl Distro {
         })
     }
 
-    fn entry(&self, pkg: &str) -> Option<&SnapshotEntry> {
-        self.snapshot
-            .get(pkg)
-            .or_else(|| self.snapshot.get(&pkg.replace('_', "-")))
+    pub fn entry(&self, pkg: &str) -> Option<&SnapshotEntry> {
+        self.snapshot.get(pkg).or_else(|| self.snapshot.get(&pkg.replace('_', "-")))
     }
 
     pub fn has(&self, pkg: &str) -> bool {
@@ -273,53 +272,26 @@ impl Distro {
         self.entry(pkg).map(|e| e.version.as_str())
     }
 
-    pub fn source(&self, pkg: &str) -> Option<(String, String, &'static str)> {
-        let e = self.entry(pkg)?;
-        Some(match (&e.tag, &e.rev) {
-            (Some(tag), _) => (e.url.clone(), tag.clone(), "tag"),
-            (None, Some(rev)) => (e.url.clone(), rev.clone(), "rev"),
-            _ => return None,
-        })
-    }
-
-    pub fn submodules(&self, pkg: &str) -> Option<bool> {
-        self.entry(pkg).and_then(|e| e.submodules)
-    }
-
     pub fn additional_folder(&self, pkg: &str) -> &str {
-        self.additional
-            .get(pkg)
-            .map(|e| e.additional_folder.as_str())
-            .unwrap_or("")
+        self.additional.get(pkg).map(|e| e.additional_folder.as_str()).unwrap_or("")
     }
 
     /// The upstream repository: snapshot, then rosdistro's source entry, then
     /// the package.xml's `<url type="repository">` (never a bloom release repo).
     pub fn repository_url(&self, pkg: &str, xml_urls: &[(String, Option<String>)]) -> Option<String> {
-        let strip = |u: &str| u.strip_suffix(".git").unwrap_or(u).to_string();
-        let is_release = |u: &str| {
-            let base = u
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or_default()
-                .to_lowercase();
-            let base = base.strip_suffix(".git").unwrap_or(&base);
-            base.ends_with("-release") || base.ends_with("_release")
-        };
         if let Some(r) = self.entry(pkg).and_then(|e| e.repository.as_deref()) {
-            return Some(strip(r));
+            return Some(strip_git(r));
         }
         if !self.additional.contains_key(pkg)
             && let Some(src) = self.live.get(pkg).and_then(|l| l.source_url.as_deref())
-            && !is_release(src)
+            && !is_release_repo(src)
         {
-            return Some(strip(src));
+            return Some(strip_git(src));
         }
         xml_urls
             .iter()
-            .find(|(u, t)| t.as_deref() == Some("repository") && !is_release(u))
-            .map(|(u, _)| strip(u))
+            .find(|(u, t)| t.as_deref() == Some("repository") && !is_release_repo(u))
+            .map(|(u, _)| strip_git(u))
     }
 
     /// Direct ROS dependencies, from the snapshot.
@@ -380,7 +352,7 @@ impl Distro {
     }
 
     pub fn raw_url(e: &SnapshotEntry) -> Result<String> {
-        let base = e.url.strip_suffix(".git").unwrap_or(&e.url);
+        let base = strip_git(&e.url);
         let Some(owner_repo) = base.split("github.com/").nth(1) else {
             bail!("only GitHub sources are supported: {}", e.url)
         };
@@ -389,11 +361,8 @@ impl Distro {
             (None, Some(tag)) => format!("refs/tags/{tag}"),
             _ => bail!("{} has neither tag nor rev", e.url),
         };
-        let folder = if e.additional_folder.is_empty() {
-            String::new()
-        } else {
-            format!("{}/", e.additional_folder)
-        };
+        let folder =
+            if e.additional_folder.is_empty() { String::new() } else { format!("{}/", e.additional_folder) };
         Ok(format!(
             "https://raw.githubusercontent.com/{owner_repo}/{reference}/{folder}{}",
             e.package_xml_name.as_deref().unwrap_or("package.xml")
@@ -405,23 +374,16 @@ impl Distro {
     fn xml_source(&self, pkg: &str) -> Result<Result<&String, String>> {
         let entry = self.entry(pkg).or_else(|| self.additional.get(pkg));
         let Some(e) = entry else {
-            return self
-                .cache_xmls
-                .get(pkg)
-                .map(Ok)
-                .with_context(|| format!("no package.xml for {pkg}"));
+            return self.cache_xmls.get(pkg).map(Ok).with_context(|| format!("no package.xml for {pkg}"));
         };
         let matches = [pkg.to_string(), pkg.replace('_', "-")].iter().any(|n| {
-            self.live.get(n).is_some_and(|l| {
-                Some(&l.url) == Some(&e.url) && e.tag.as_ref() == Some(&l.tag) && l.version == e.version
-            }) && self.cache_xmls.contains_key(n)
+            self.live
+                .get(n)
+                .is_some_and(|l| l.url == e.url && e.tag.as_ref() == Some(&l.tag) && l.version == e.version)
+                && self.cache_xmls.contains_key(n)
         });
         if matches && !self.additional.contains_key(pkg) {
-            let n = if self.cache_xmls.contains_key(pkg) {
-                pkg.to_string()
-            } else {
-                pkg.replace('_', "-")
-            };
+            let n = if self.cache_xmls.contains_key(pkg) { pkg.to_string() } else { pkg.replace('_', "-") };
             return Ok(Ok(&self.cache_xmls[&n]));
         }
         Ok(Err(Self::raw_url(e)?))
@@ -429,20 +391,14 @@ impl Distro {
 
     /// Download, in parallel, every package.xml of `pkgs` the cache doesn't have.
     pub fn prefetch<'a>(&self, pkgs: impl IntoIterator<Item = &'a String>) -> Result<usize> {
-        let urls: BTreeSet<String> = pkgs
-            .into_iter()
-            .filter_map(|p| self.xml_source(p).ok()?.err())
-            .collect();
+        let urls: BTreeSet<String> =
+            pkgs.into_iter().filter_map(|p| self.xml_source(p).ok()?.err()).collect();
         let n = urls.len();
-        let results: Vec<Result<(String, String)>> = urls
+        let fetched: Vec<(String, String)> = urls
             .into_par_iter()
             .map(|u| Ok((u.clone(), get(&self.client, &u)?.text()?)))
-            .collect();
-        let mut fetched = self.fetched.lock().unwrap();
-        for r in results {
-            let (u, t) = r?;
-            fetched.insert(u, t);
-        }
+            .collect::<Result<_>>()?;
+        self.fetched.lock().unwrap().extend(fetched);
         Ok(n)
     }
 
@@ -460,11 +416,7 @@ impl Distro {
         }
     }
 
-    /// The package.xml, parsed (pixi-build-ros) with its conditions evaluated.
     pub fn package(&self, pkg: &str) -> Result<PackageXml> {
-        let xml = self.package_xml(pkg)?;
-        Ok(PackageXml::parse(&xml)
-            .map_err(|e| anyhow!("{pkg}: {e}"))?
-            .evaluate_conditions(&self.condition_env))
+        parse_package(&self.package_xml(pkg)?, pkg, &self.condition_env)
     }
 }

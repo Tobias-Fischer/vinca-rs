@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use pixi_build_ros::package_xml::PackageXml;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -25,16 +26,23 @@ struct Cli {
     command: Command,
 }
 
+/// What `generate` and `requirements` work on.
+#[derive(Args)]
+struct Target {
+    /// the vinca.yaml to generate from
+    #[arg(long, default_value = "vinca.yaml")]
+    config: PathBuf,
+    /// conda subdir to generate for
+    #[arg(long)]
+    platform: String,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Generate the recipes of a distribution for one target platform
     Generate {
-        /// the vinca.yaml to generate from
-        #[arg(long, default_value = "vinca.yaml")]
-        config: PathBuf,
-        /// conda subdir to generate for
-        #[arg(long)]
-        platform: String,
+        #[command(flatten)]
+        target: Target,
         /// where the recipes go (one directory per recipe; emptied first)
         #[arg(long, default_value = "recipes")]
         out: PathBuf,
@@ -96,10 +104,8 @@ enum Command {
     },
     /// The requirements of every selected package for a platform, as JSON
     Requirements {
-        #[arg(long, default_value = "vinca.yaml")]
-        config: PathBuf,
-        #[arg(long)]
-        platform: String,
+        #[command(flatten)]
+        target: Target,
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -122,55 +128,36 @@ fn write_json(value: &serde_json::Value, out: Option<&Path>) -> Result<()> {
     }
 }
 
-struct Loaded {
-    conf: config::Config,
-    distro: distro::Distro,
-}
-
-fn load(config: &Path, platform: &str) -> Result<Loaded> {
-    let conf = config::read(config, platform)?;
+/// The configuration and the distribution it builds.
+fn load(t: &Target) -> Result<(config::Config, distro::Distro)> {
+    let conf = config::read(&t.config, &t.platform)?;
     let distro = distro::Distro::load(&conf)?;
-    Ok(Loaded { conf, distro })
+    Ok((conf, distro))
 }
 
-/// The selection, with every package.xml it needs fetched, and ros_base's
-/// packages (for `<group_depend>`).
-fn select(
-    g: &generate::Generator,
-    distro: &distro::Distro,
-) -> Result<(generate::Selection, Vec<pixi_build_ros::package_xml::PackageXml>)> {
-    let selection = g.select()?;
-    let ros_base_names = distro.depends("ros_base", &HashSet::new())?;
-    let fetched = distro.prefetch(selection.packages.iter().chain(ros_base_names.iter()))?;
-    eprintln!(
-        "{} packages selected; {fetched} package.xml files fetched",
-        selection.packages.len()
-    );
-    let ros_base = ros_base_names
-        .iter()
-        .filter_map(|p| distro.package(p).ok())
-        .collect();
-    Ok((selection, ros_base))
+/// The selected packages, with every package.xml they need fetched, and
+/// ros_base's packages (for `<group_depend>`).
+fn select(g: &generate::Generator) -> Result<(Vec<String>, Vec<PackageXml>)> {
+    let packages = g.select()?;
+    let ros_base_names = g.distro.depends("ros_base", &HashSet::new())?;
+    let fetched = g.distro.prefetch(packages.iter().chain(ros_base_names.iter()))?;
+    eprintln!("{} packages selected; {fetched} package.xml files fetched", packages.len());
+    let ros_base = ros_base_names.iter().filter_map(|p| g.distro.package(p).ok()).collect();
+    Ok((packages, ros_base))
 }
 
-fn generate_cmd(
-    config: PathBuf,
-    platform: String,
-    out: PathBuf,
-    variant_config: PathBuf,
-    all: bool,
-) -> Result<()> {
+fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> Result<()> {
     let t0 = Instant::now();
-    let Loaded { conf, distro } = load(&config, &platform)?;
+    let (conf, distro) = load(&t)?;
     let mut g = generate::Generator::new(&conf, &distro);
-    let (selection, ros_base) = select(&g, &distro)?;
+    let (packages, ros_base) = select(&g)?;
 
     if out.exists() {
         std::fs::remove_dir_all(&out).with_context(|| out.display().to_string())?;
     }
     std::fs::create_dir_all(&out)?;
     let mut n = 0;
-    for ros in &selection.packages {
+    for ros in &packages {
         let Some(dir) = g.package(ros, &ros_base)? else {
             continue;
         };
@@ -187,19 +174,16 @@ fn generate_cmd(
     }
     eprintln!("{n} recipes generated in {:.1?}", t0.elapsed());
     if !g.unsatisfied.is_empty() {
-        eprintln!(
-            "unsatisfied: {}",
-            g.unsatisfied.iter().cloned().collect::<Vec<_>>().join(", ")
-        );
+        eprintln!("unsatisfied: {}", g.unsatisfied.iter().cloned().collect::<Vec<_>>().join(", "));
     }
     if !all && !conf.skip_existing.is_empty() {
         // the generated recipes' names (one directory per recipe)
         let names: Vec<String> = std::fs::read_dir(&out)?
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
             .collect();
-        let published = skip_existing::published(&conf.skip_existing, &platform, &conf.ros_distro, &names)?;
+        let published = skip_existing::published(&conf.skip_existing, &t.platform, &conf.ros_distro, &names)?;
         let variants = variant_config.is_file().then_some(variant_config.as_path());
-        let removed = skip_existing::remove_built(&out, &platform, variants, &published)?;
+        let removed = skip_existing::remove_built(&out, &t.platform, variants, &published)?;
         eprintln!(
             "{} recipes already published, {} left to build ({:.1?})",
             removed.len(),
@@ -210,22 +194,22 @@ fn generate_cmd(
     Ok(())
 }
 
-fn requirements_cmd(config: PathBuf, platform: String, out: Option<PathBuf>) -> Result<()> {
-    let Loaded { conf, distro } = load(&config, &platform)?;
+fn requirements_cmd(t: Target, out: Option<PathBuf>) -> Result<()> {
+    let (conf, distro) = load(&t)?;
     let mut g = generate::Generator::new(&conf, &distro);
-    let (selection, ros_base) = select(&g, &distro)?;
+    let (selected, ros_base) = select(&g)?;
     let mut packages = BTreeMap::new();
-    for ros in &selection.packages {
+    for ros in &selected {
         if let Some(dir) = g.package(ros, &ros_base)? {
             packages.insert(ros.clone(), serde_json::to_value(&dir.recipe.requirements)?);
         }
     }
     write_json(
         &serde_json::json!({
-            "platform": platform,
+            "platform": t.platform,
             "prefix": g.prefix(),
             "packages": packages,
-            "run_constraints": conf.mutex.as_ref().map(|m| m.run_constraints.clone()).unwrap_or_default(),
+            "run_constraints": conf.mutex_package.as_ref().map(|m| m.run_constraints.clone()).unwrap_or_default(),
         }),
         out.as_deref(),
     )
@@ -233,13 +217,9 @@ fn requirements_cmd(config: PathBuf, platform: String, out: Option<PathBuf>) -> 
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Generate {
-            config,
-            platform,
-            out,
-            variant_config,
-            all,
-        } => generate_cmd(config, platform, out, variant_config, all),
+        Command::Generate { target, out, variant_config, all } => {
+            generate_cmd(target, out, variant_config, all)
+        }
         Command::Workflow {
             recipes,
             platform,
@@ -259,43 +239,23 @@ fn main() -> Result<()> {
                     .with_context(|| p.display().to_string())?,
                 None => workflow::Timings::default(),
             };
-            let opts = workflow::Options {
-                platform,
-                max_batch,
-                timings,
-                vars,
-                stage_barriers,
-            };
-            let outputs = workflow::Outputs {
-                template: template.as_deref(),
-                workflow: out.as_deref(),
-                json: json.as_deref(),
-            };
-            if !workflow::generate(&recipes, &outputs, &opts)? {
+            let opts =
+                workflow::Options { platform, max_batch, timings, vars, stage_barriers, template, out, json };
+            if !workflow::generate(&recipes, &opts)? {
                 eprintln!("nothing to build");
-                if let Some(j) = json {
+                if let Some(j) = opts.json {
                     std::fs::write(j, r#"{"stages": []}"#)?;
                 }
             }
             Ok(())
         }
-        Command::Snapshot {
-            distro,
-            rosdistro_ref,
-            package,
-            out,
-            fill_dependencies,
-        } => {
+        Command::Snapshot { distro, rosdistro_ref, package, out, fill_dependencies } => {
             if fill_dependencies {
                 snapshot::fill_dependencies(&distro, &out)
             } else {
                 snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out)
             }
         }
-        Command::Requirements {
-            config,
-            platform,
-            out,
-        } => requirements_cmd(config, platform, out),
+        Command::Requirements { target, out } => requirements_cmd(target, out),
     }
 }

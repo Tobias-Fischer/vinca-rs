@@ -1,6 +1,8 @@
 //! package.xml `<license>` -> SPDX expression (port of vinca/license_utils.py,
 //! with the `spdx` crate in place of Python's license-expression).
 
+use indexmap::IndexSet;
+
 const LOOKUP: &[(&str, &str)] = &[
     ("bsd", "BSD-3-Clause"),
     ("bsd-3", "BSD-3-Clause"),
@@ -88,11 +90,7 @@ fn canonical(id: spdx::LicenseId, or_later: bool) -> String {
     if !id.is_gnu() {
         return format!("{}{}", id.name, if or_later { "+" } else { "" });
     }
-    let base = id
-        .name
-        .trim_end_matches('+')
-        .trim_end_matches("-only")
-        .trim_end_matches("-or-later");
+    let base = id.name.trim_end_matches('+').trim_end_matches("-only").trim_end_matches("-or-later");
     let later = or_later || id.name.ends_with('+') || id.name.ends_with("-or-later");
     format!("{base}{}", if later { "-or-later" } else { "-only" })
 }
@@ -117,54 +115,37 @@ fn normalize(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// One license: a known name, a valid SPDX expression, or else a LicenseRef.
 fn single(s: &str, pkg: &str) -> String {
-    lookup(s)
-        .map(str::to_string)
-        .or_else(|| normalize(s))
-        .unwrap_or_else(|| {
-            let clean: String = s
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect();
-            eprintln!("warning: license '{s}' of {pkg} is not SPDX: using LicenseRef-{clean}");
-            format!("LicenseRef-{clean}")
-        })
+    lookup(s).map(str::to_string).or_else(|| normalize(s)).unwrap_or_else(|| {
+        let clean: String = s
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+            .collect();
+        eprintln!("warning: license '{s}' of {pkg} is not SPDX: using LicenseRef-{clean}");
+        format!("LicenseRef-{clean}")
+    })
+}
+
+fn any_of(licenses: IndexSet<String>) -> String {
+    licenses.into_iter().collect::<Vec<_>>().join(" OR ")
 }
 
 pub fn to_spdx(licenses: &[String], pkg: &str) -> Option<String> {
-    let mut out: Vec<String> = vec![];
-    for lic in licenses {
-        let lic = lic.trim();
+    let mut out = IndexSet::new();
+    for lic in licenses.iter().map(|l| l.trim()) {
         if lic.is_empty() || lic.eq_ignore_ascii_case("todo") {
             continue;
         }
-        let item = if let Some(l) = lookup(lic) {
-            l.to_string()
-        } else if let Some(n) = normalize(lic) {
-            n
-        } else if lic.contains(',') {
-            let mut parts: Vec<String> = vec![];
-            for p in lic.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-                let s = single(p, pkg);
-                if !parts.contains(&s) {
-                    parts.push(s);
-                }
-            }
-            parts.join(" OR ")
+        // a comma-separated list, unless the whole is a known name or SPDX expression
+        if lic.contains(',') && lookup(lic).is_none() && normalize(lic).is_none() {
+            let parts = lic.split(',').map(str::trim).filter(|p| !p.is_empty());
+            out.insert(any_of(parts.map(|p| single(p, pkg)).collect()));
         } else {
-            single(lic, pkg)
-        };
-        if !out.contains(&item) {
-            out.push(item);
+            out.insert(single(lic, pkg));
         }
     }
-    (!out.is_empty()).then(|| out.join(" OR "))
+    (!out.is_empty()).then(|| any_of(out))
 }
 
 #[cfg(test)]
@@ -191,10 +172,7 @@ mod tests {
 
     #[test]
     fn several_licenses() {
-        assert_eq!(
-            spdx(&["BSD", "Apache 2.0"]).unwrap(),
-            "BSD-3-Clause OR Apache-2.0"
-        );
+        assert_eq!(spdx(&["BSD", "Apache 2.0"]).unwrap(), "BSD-3-Clause OR Apache-2.0");
         assert_eq!(spdx(&["BSD, Apache 2.0"]).unwrap(), "BSD-3-Clause OR Apache-2.0");
         assert_eq!(spdx(&["TODO"]), None);
         assert_eq!(spdx(&["My Own License"]).unwrap(), "LicenseRef-My-Own-License");
