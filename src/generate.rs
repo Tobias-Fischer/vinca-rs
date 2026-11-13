@@ -304,7 +304,7 @@ impl<'a> Generator<'a> {
         let Some(path) = self.conf.tests.get(conda) else {
             return Ok(vec![]);
         };
-        let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name)
+        let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name, self.conf.platform.as_str())
             .map_err(|source| config::Error::Selector { path: path.to_path_buf(), source })?;
         Ok(t.get("tests").and_then(Value::as_sequence).cloned().unwrap_or_default())
     }
