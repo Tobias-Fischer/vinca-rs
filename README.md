@@ -55,6 +55,7 @@ platform. Unknown keys are errors.
 | `conda_index` | rosdep key → conda packages (`robostack:` per platform) |
 | `build_number`, `mutex_package`, `package_name_mode` | |
 | `skip_existing` | channels whose builds aren't built again |
+| `conditional_python_dependency` | only packages with Python content (ament_python, message packages, Python dependencies) get Python in host/run and with it the Python variants; the others are built once, with a test that they install no Python modules |
 
 An additional recipe that replaces a release of the snapshot needs
 `override: <reason>` (RoboStack/vinca#126); vinca-rs warns when the release is newer.

@@ -75,6 +75,20 @@ impl Reqs {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    /// Replace a spec, also inside conditional requirements.
+    pub fn replace(&mut self, from: &str, to: &str) {
+        let swap = |s: &String| if s == from { to.to_string() } else { s.clone() };
+        self.0 = std::mem::take(&mut self.0)
+            .into_iter()
+            .map(|r| match r {
+                Req::Spec(s) => Req::Spec(swap(&s)),
+                Req::If { cond, then } => Req::If {
+                    cond,
+                    then: then.iter().map(swap).collect(),
+                },
+            })
+            .collect();
+    }
 }
 
 impl Serialize for Reqs {

@@ -14,6 +14,55 @@ use crate::license::to_spdx;
 use crate::recipe::*;
 use crate::selectors::evaluate_distro;
 
+/// conditional_python_dependency: dependencies that mean a package's own
+/// artifact needs Python (rosidl_default_generators doesn't: rclcpp only uses it
+/// for test messages; message packages are found by their group instead).
+const PYTHON_MARKERS: [&str; 5] = [
+    "rclpy",
+    "pybind11",
+    "python_cmake_module",
+    "ament_cmake_python",
+    "rosidl_pycommon",
+];
+
+/// conditional_python_dependency: Python for a package built without it (an
+/// interpreter for ament's scripts), pinned so that it isn't a variant.
+const BUILD_TIME_PYTHON: &str = "python ${{ python_min | default('3.11') }}.*";
+
+/// Whether a package's own artifact needs Python (host/run), i.e. is built per
+/// Python version. Conservative: a false "yes" only costs builds. Conditions are
+/// evaluated (RoboStack/vinca#189).
+fn python_needed(xml: &PackageXml, build_type: &str) -> bool {
+    if build_type == "ament_python" {
+        return true;
+    }
+    if xml
+        .member_of_groups
+        .iter()
+        .any(|g| g.is_active() && g.name == "rosidl_interface_packages")
+    {
+        return true;
+    }
+    let d = &xml.dependencies;
+    let deps = names(&[
+        &d.build_depends,
+        &d.build_export_depends,
+        &d.exec_depends,
+        &d.run_depends,
+        &d.test_depends,
+        &d.depend,
+    ]);
+    let tools = names(&[&d.buildtool_depends, &d.buildtool_export_depends]);
+    // build tools only by the markers: a plain python3 buildtool_depend is an
+    // interpreter for a code generator (BUILD_TIME_PYTHON)
+    deps.iter()
+        .chain(&tools)
+        .any(|n| PYTHON_MARKERS.contains(&n.as_str()))
+        || deps
+            .iter()
+            .any(|n| n.contains("python") || n.starts_with("pybind"))
+}
+
 /// The ROS packages that every ROS 2 package builds on, and that themselves don't.
 const CORE: [&str; 4] = [
     "ament_cmake_core",
@@ -384,6 +433,9 @@ impl<'a> Generator<'a> {
             format!("bld_{script_base}.bat")
         };
 
+        let conditional = self.conf.conditional_python;
+        let needs_python = !conditional || python_needed(&xml, &build_type);
+
         let cross = |s: &str| Req::cross(s);
         let mut build = Reqs::default();
         build.extend(["${{ compiler('cxx') }}", "${{ compiler('c') }}"].map(String::from));
@@ -412,12 +464,13 @@ impl<'a> Generator<'a> {
         }
         let mut host = Reqs::default();
         host.push(Req::native("pkg-config"));
-        host.extend(["python", "numpy", "pip"].map(String::from));
         let mut run = Reqs::default();
-
-        let python = self.resolve("python", false)?;
-        host.extend(python.clone());
-        run.extend(python);
+        if needs_python {
+            host.extend(["python", "numpy", "pip"].map(String::from));
+            let python = self.resolve("python", false)?;
+            host.extend(python.clone());
+            run.extend(python);
+        }
         if build_type == "ament_python" {
             host.extend(self.resolve("python-setuptools", false)?);
         }
@@ -464,6 +517,8 @@ impl<'a> Generator<'a> {
             let resolved = self.resolve(&tool, false)?;
             if resolved.iter().any(|r| r == "git") {
                 build.extend(resolved);
+            } else if conditional && resolved == ["python"] {
+                // an interpreter for a code generator: BUILD_TIME_PYTHON
             } else if !resolved.is_empty() && tool != "cmake" {
                 build_deps.push(tool);
             }
@@ -499,6 +554,12 @@ impl<'a> Generator<'a> {
             }
         }
 
+        // after dependencies.yaml, which can give a package Python (e.g. one that
+        // embeds the interpreter)
+        let python_free = conditional && !host.contains("python");
+        if python_free {
+            build.replace("python", BUILD_TIME_PYTHON);
+        }
         self.apply_rules(&mut build, &mut host, &mut run);
 
         let mut recipe = self.base(
@@ -527,6 +588,16 @@ impl<'a> Generator<'a> {
             let share = if self.unix() { "share" } else { "Library/share" };
             recipe.tests.push(serde_yaml::to_value(serde_json::json!({
                 "package_contents": { "files": [format!("{share}/{}/package.xml", xml.name)] }
+            }))?);
+        }
+        // built once, for no particular Python: Python modules in it would only work
+        // with the interpreter it happened to be built with
+        if python_free {
+            recipe.tests.push(serde_yaml::to_value(serde_json::json!({
+                "package_contents": {
+                    "strict": false,
+                    "files": { "not_exists": ["**/site-packages/**", "**/*.cpython-*.so", "**/*.pyd"] }
+                }
             }))?);
         }
         recipe.tests.extend(self.tests(&conda, &mut files)?);

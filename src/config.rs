@@ -143,6 +143,10 @@ struct VincaYaml {
     packages_skip: Vec<String>,
     #[serde(default)]
     skip_existing: Vec<String>,
+    /// only packages with Python content get Python in host/run (and with it the
+    /// Python variants); the others are built once
+    #[serde(default)]
+    conditional_python_dependency: bool,
     // read by the CI workflow generator, which moves to the monorepo
     #[allow(dead_code)]
     setup_pixi_version: Option<String>,
@@ -176,6 +180,7 @@ pub struct Config {
     pub snapshot: IndexMap<String, SnapshotEntry>,
     pub additional: IndexMap<String, SnapshotEntry>,
     pub skip_existing: Vec<String>,
+    pub conditional_python: bool,
 }
 
 pub fn load_yaml(path: &Path) -> Result<Value> {
@@ -456,6 +461,7 @@ pub fn read(path: &Path, platform: &str) -> Result<Config> {
         snapshot,
         additional,
         skip_existing: conf.skip_existing,
+        conditional_python: conf.conditional_python_dependency,
     })
 }
 
