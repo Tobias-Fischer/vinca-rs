@@ -1,0 +1,37 @@
+[package]
+name = "vinca-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Conda (rattler-build) recipe and CI workflow generator for ROS distributions (RoboStack)"
+license = "MIT"
+repository = "https://github.com/Tobias-Fischer/vinca-rs"
+publish = false
+
+[[bin]]
+name = "vinca-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+indexmap = { version = "2", features = ["serde"] }
+minijinja = "2"
+# package.xml parsing (REP 149 conditions); the library target is pending upstream
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "1114625401652ae3fe0ebe9c48601ef8999a788b" }
+rattler_build_recipe = "0.1.24"
+rattler_build_variant_config = "0.1.24"
+rattler_conda_types = { version = "0.58", default-features = false }
+rayon = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+roxmltree = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+spdx = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
