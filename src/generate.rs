@@ -7,11 +7,12 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
+use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
 use pixi_build_ros::package_xml::{Dependency, PackageXml};
 use serde_yaml::Value;
 use thiserror::Error;
 
-use crate::config::{self, Config, PackageNameMode, PlatformList};
+use crate::config::{self, Config, PackageNameMode};
 use crate::distro::{self, Distro};
 use crate::license::to_spdx;
 use crate::recipe::*;
@@ -21,8 +22,9 @@ use crate::selectors::evaluate_distro;
 pub enum Error {
     #[error("no template for {0}")]
     NoTemplate(String),
-    #[error("conda_index entry {0} has no robostack mapping")]
-    NoRobostackMapping(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageMap(#[from] PackageMapError),
     #[error(transparent)]
     #[diagnostic(transparent)]
     Distro(#[from] distro::Error),
@@ -152,8 +154,7 @@ fn names(deps: &[&Vec<Dependency>]) -> Vec<String> {
 
 impl<'a> Generator<'a> {
     pub fn new(conf: &'a Config, distro: &'a Distro) -> Self {
-        let shadowed =
-            conf.conda_indexes.iter().flat_map(|i| i.keys()).filter(|n| distro.has(n)).cloned().collect();
+        let shadowed = conf.package_map.keys().filter(|n| distro.has(n)).cloned().collect();
         Self { conf, distro, unsatisfied: BTreeSet::new(), shadowed }
     }
 
@@ -199,39 +200,29 @@ impl<'a> Generator<'a> {
 
     /// A rosdep key or ROS package -> conda specs.
     fn resolve(&mut self, dep: &str, kind: DepKind) -> Result<Vec<String>> {
-        for index in &self.conf.conda_indexes {
-            let Some(entry) = index.get(dep) else {
-                continue;
-            };
-            let specs = match &entry.robostack {
-                None => return Err(Error::NoRobostackMapping(dep.into())),
-                Some(PlatformList::All(l)) => l.clone(),
-                Some(PlatformList::PerPlatform(m)) => m
-                    .get(self.conf.platform.as_str())
-                    .or_else(|| match self.conf.platform.only_platform() {
-                        Some("win") => m.get("win64"),
-                        Some(os @ ("linux" | "osx" | "emscripten")) => m.get(os),
-                        _ => None,
-                    })
-                    .cloned()
-                    .flatten()
-                    .unwrap_or_default(),
-            };
-            if kind == DepKind::Build {
-                return Ok(specs);
-            }
-            return Ok(specs
+        match lookup(&self.conf.package_map, dep, self.conf.platform)? {
+            Some(MappedPackages::Conda(specs)) if kind == DepKind::Build => Ok(specs),
+            Some(MappedPackages::Conda(specs)) => Ok(specs
                 .into_iter()
                 .map(|s| if s.contains("${{") { s } else { s.split(' ').next().unwrap().to_string() })
                 .filter(|s| s != "python")
-                .collect());
+                .collect()),
+            Some(MappedPackages::Ros(names)) => {
+                Ok(names.iter().filter_map(|n| self.ros_dependency(n)).collect())
+            }
+            None => Ok(self.ros_dependency(dep).into_iter().collect()),
         }
+    }
+
+    /// A ROS package dependency's conda name, unless the distribution doesn't have
+    /// it or excludes it (then it is reported as unsatisfied).
+    fn ros_dependency(&mut self, dep: &str) -> Option<String> {
         let excluded = self.conf.packages_exclude.iter().any(|e| e == dep || *e == dep.replace('_', "-"));
         if !self.distro.has(dep) || excluded {
             self.unsatisfied.insert(dep.to_string());
-            return Ok(vec![]);
+            return None;
         }
-        Ok(vec![self.conda_name(dep)])
+        Some(self.conda_name(dep))
     }
 
     fn resolve_all(&mut self, deps: impl IntoIterator<Item = String>, kind: DepKind) -> Result<Vec<String>> {
