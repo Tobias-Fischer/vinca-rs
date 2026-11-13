@@ -16,6 +16,9 @@ channels = ["https://prefix.dev/conda-forge"]
 
 [package.build.config]
 binaries = ["vinca-rs"]
+# cargo's own git (libgit2) can't check out pixi's long test file names on Windows;
+# the git CLI can, with core.longpaths
+env = { CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
 
 [package.build-dependencies]
 # pixi-build-ros' dependencies need a recent compiler

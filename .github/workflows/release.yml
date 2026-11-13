@@ -23,6 +23,7 @@ jobs:
           - { os: windows-2022, platform: win-64 }
     steps:
       - uses: actions/checkout@v6
+      - run: git config --global core.longpaths true
       - uses: prefix-dev/setup-pixi@v0.11.0
         with:
           pixi-version: v0.83.0
