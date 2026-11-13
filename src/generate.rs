@@ -250,10 +250,14 @@ impl<'a> Generator<'a> {
         }
         skip.extend(self.shadowed.iter().cloned());
         let mut selected = BTreeSet::new();
+        let mut unknown = vec![];
         for root in &self.conf.packages_select_by_deps {
             let root = root.replace('-', "_");
             if self.shadowed.contains(&root) {
                 continue;
+            }
+            if !self.distro.has(&root) {
+                unknown.push(root.clone());
             }
             selected.insert(root.clone());
             if skip.contains(&root) {
@@ -262,6 +266,9 @@ impl<'a> Generator<'a> {
             for dep in self.distro.depends(&root, &skip)? {
                 selected.insert(dep);
             }
+        }
+        if !unknown.is_empty() {
+            eprintln!("warning: packages_select_by_deps not in the distribution: {}", unknown.join(", "));
         }
         if !self.distro.ros1 && selected.iter().any(|p| !CORE.contains(&p.as_str())) {
             for p in ["ros_workspace", "ros_environment"] {
@@ -295,13 +302,14 @@ impl<'a> Generator<'a> {
     }
 
     fn tests(&self, conda: &str, files: &mut RecipeFiles) -> Result<Vec<serde_yaml::Value>> {
-        if let Some(dir) = self.conf.test_folders.get(conda) {
+        let (test_file, test_folder) = self.conf.package_tests(conda);
+        if let Some(dir) = test_folder {
             for e in fs::read_dir(dir)? {
                 let e = e?;
                 files.copies.push((PathBuf::from(e.file_name()), e.path()));
             }
         }
-        let Some(path) = self.conf.tests.get(conda) else {
+        let Some(path) = test_file else {
             return Ok(vec![]);
         };
         let t = evaluate_distro(&config::load_yaml(path)?, &self.distro.name, self.conf.platform.as_str())
@@ -465,7 +473,7 @@ impl<'a> Generator<'a> {
         run.extend(self.resolve_all(run_deps, DepKind::Run)?);
 
         // patch/dependencies.yaml
-        if let Some(m) = self.conf.depmods.get(&xml.name).cloned() {
+        if let Some(m) = self.conf.depmods(ros).cloned() {
             for (list, add, remove) in [
                 (&mut build, &m.add_build, &m.remove_build),
                 (&mut host, &m.add_host, &m.remove_host),
@@ -519,7 +527,7 @@ impl<'a> Generator<'a> {
             }))?);
         }
         recipe.tests.extend(self.tests(&conda, &mut files)?);
-        let info = self.conf.info(&self.conf.short_name(&conda));
+        let info = self.conf.info(&conda);
         let prefix = self.prefix();
         let vars = [
             ("ros_package_prefix", prefix.as_str()),

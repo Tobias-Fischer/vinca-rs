@@ -211,6 +211,11 @@ fn load(t: &Target) -> Result<(config::Config, distro::Distro)> {
 /// ros_base's packages (for `<group_depend>`).
 fn select(g: &generate::Generator) -> Result<(Vec<String>, Vec<PackageXml>)> {
     let packages = g.select()?;
+    // the distribution's packages, whether selected for this platform or not
+    let unmatched = g.conf.unmatched(|p| g.distro.has(p));
+    if !unmatched.is_empty() {
+        eprintln!("warning: entries for packages not in the distribution: {}", unmatched.join(", "));
+    }
     let ros_base_names = g.distro.depends("ros_base", &HashSet::new())?;
     let fetched = g.distro.prefetch(packages.iter().chain(ros_base_names.iter()))?;
     eprintln!("{} packages selected; {fetched} package.xml files fetched", packages.len());
