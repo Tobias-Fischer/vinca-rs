@@ -98,19 +98,23 @@ fn canonical(id: spdx::LicenseId, or_later: bool) -> String {
 /// A valid SPDX expression, with canonical identifiers.
 fn normalize(s: &str) -> Option<String> {
     let expr = spdx::Expression::parse_mode(s, MODE).ok()?;
-    let mut out = s.to_string();
+    let mut spans = vec![];
     for req in expr.requirements() {
-        if let spdx::LicenseItem::Spdx { id, or_later } = req.req.license {
-            let canonical = canonical(id, or_later);
-            // the span leaves out a trailing `+` (GPL-3.0+), which `canonical` covers
-            let mut end = req.span.end as usize;
-            if or_later && s[end..].starts_with('+') {
-                end += 1;
-            }
-            out = out.replacen(&s[req.span.start as usize..end], &canonical, 1);
-        } else {
+        let spdx::LicenseItem::Spdx { id, or_later } = req.req.license else {
             return None;
+        };
+        // the span leaves out a trailing `+` (GPL-3.0+), which `canonical` covers
+        let mut end = req.span.end as usize;
+        if or_later && s[end..].starts_with('+') {
+            end += 1;
         }
+        spans.push((req.span.start as usize..end, canonical(id, or_later)));
+    }
+    // back to front, so that the spans before each replacement stay valid
+    spans.sort_by_key(|(r, _)| r.start);
+    let mut out = s.to_string();
+    for (range, canonical) in spans.into_iter().rev() {
+        out.replace_range(range, &canonical);
     }
     Some(out)
 }
@@ -168,6 +172,9 @@ mod tests {
         assert_eq!(spdx(&["GPL-3.0+"]).unwrap(), "GPL-3.0-or-later");
         assert_eq!(spdx(&["LGPL-2.1+"]).unwrap(), "LGPL-2.1-or-later");
         assert_eq!(spdx(&["GPL-2.0"]).unwrap(), "GPL-2.0-only");
+        // an id that is a prefix of another one in the expression
+        assert_eq!(spdx(&["LGPL-2.0 OR GPL-2.0"]).unwrap(), "LGPL-2.0-only OR GPL-2.0-only");
+        assert_eq!(spdx(&["GPL-2.0+ AND GPL-2.0"]).unwrap(), "GPL-2.0-or-later AND GPL-2.0-only");
     }
 
     #[test]
