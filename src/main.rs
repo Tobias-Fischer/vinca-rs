@@ -30,6 +30,12 @@ enum Error {
     NothingToWrite,
     #[error("invalid timings {}", path.display())]
     Timings { path: PathBuf, source: serde_json::Error },
+    #[error("{} is not a recipes directory: it has {}", dir.display(), entry.display())]
+    #[diagnostic(help(
+        "--out is emptied first, so it must be empty or hold only recipe directories \
+         (each with a recipe.yaml); give another --out or remove it yourself"
+    ))]
+    NotRecipesDir { dir: PathBuf, entry: PathBuf },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -98,7 +104,8 @@ enum Command {
     Generate {
         #[command(flatten)]
         target: Target,
-        /// where the recipes go (one directory per recipe; emptied first)
+        /// where the recipes go (one directory per recipe; emptied first, which only
+        /// a directory of recipe directories may be)
         #[arg(long, default_value = "recipes")]
         out: PathBuf,
         /// variant config the recipes are built with (to compare build strings
@@ -211,15 +218,28 @@ fn select(g: &generate::Generator) -> Result<(Vec<String>, Vec<PackageXml>)> {
     Ok((packages, ros_base))
 }
 
+/// Empty `out` for the new recipes, if it is a recipes directory (only
+/// subdirectories with a recipe.yaml): never anything else, e.g. `--out .`.
+fn clear_recipes_dir(out: &Path) -> Result<()> {
+    if !out.exists() {
+        return Ok(());
+    }
+    for e in fs::read_dir(out)? {
+        let path = e?.path();
+        if !path.join("recipe.yaml").is_file() {
+            return Err(Error::NotRecipesDir { dir: out.into(), entry: path });
+        }
+    }
+    Ok(fs::remove_dir_all(out)?)
+}
+
 fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> Result<()> {
     let t0 = Instant::now();
     let (conf, distro) = load(&t)?;
     let mut g = generate::Generator::new(&conf, &distro);
     let (packages, ros_base) = select(&g)?;
 
-    if out.exists() {
-        fs::remove_dir_all(&out)?;
-    }
+    clear_recipes_dir(&out)?;
     fs::create_dir_all(&out)?;
     let mut n = 0;
     for ros in &packages {
@@ -332,5 +352,27 @@ fn run(command: Command) -> Result<()> {
         Command::Solve { platform, channels, variant_config } => {
             Ok(solve::serve(platform, &channels, variant_config)?)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_recipes_directory_is_emptied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("recipes");
+        clear_recipes_dir(&out).unwrap(); // missing: nothing to do
+        fs::create_dir_all(out.join("ros-x")).unwrap();
+        fs::write(out.join("ros-x/recipe.yaml"), "").unwrap();
+        clear_recipes_dir(&out).unwrap();
+        assert!(!out.exists());
+
+        fs::create_dir_all(out.join("ros-x")).unwrap();
+        fs::write(out.join("ros-x/recipe.yaml"), "").unwrap();
+        fs::write(out.join("README.md"), "").unwrap();
+        assert!(matches!(clear_recipes_dir(&out), Err(Error::NotRecipesDir { .. })));
+        assert!(out.join("ros-x/recipe.yaml").exists());
     }
 }
