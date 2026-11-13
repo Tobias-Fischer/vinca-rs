@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>demo_py</name>
+  <version>0.4.0</version>
+  <description>A Python demo package.</description>
+  <maintainer email="m@example.com">M</maintainer>
+  <license>BSD</license>
+  <exec_depend>demo_cpp</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

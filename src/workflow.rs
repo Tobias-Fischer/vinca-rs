@@ -732,6 +732,19 @@ mod tests {
     }
 
     #[test]
+    fn simulate_waits_for_needs_and_runners() {
+        let jobs: Vec<Vec<String>> = [["a"], ["b"], ["c"]].iter().map(|j| vec![j[0].to_string()]).collect();
+        let t = timings(&[("a", 100.0), ("b", 50.0), ("c", 10.0)]);
+        // c needs a; a and b run at once
+        let needs = vec![BTreeSet::new(), BTreeSet::new(), BTreeSet::from([0])];
+        let clock = Clock { t: &t, default: 0.0, overhead: 0.0, runners: 2 };
+        assert_eq!(simulate(&jobs, &job_stages(&needs), &needs, &clock, false), 110.0);
+        // one runner: one job after the other
+        let clock = Clock { runners: 1, ..clock };
+        assert_eq!(simulate(&jobs, &job_stages(&needs), &needs, &clock, false), 160.0);
+    }
+
+    #[test]
     fn zero_runners_is_invalid() {
         assert!(serde_json::from_str::<Timings>(r#"{"runners": 0}"#).is_err());
     }

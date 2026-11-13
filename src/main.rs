@@ -4,6 +4,8 @@
 mod config;
 mod distro;
 mod generate;
+#[cfg(test)]
+mod golden;
 mod license;
 mod recipe;
 mod selectors;
@@ -239,30 +241,35 @@ fn clear_recipes_dir(out: &Path) -> Result<()> {
     Ok(fs::remove_dir_all(out)?)
 }
 
-fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> Result<()> {
-    let t0 = Instant::now();
-    let (conf, distro) = load(&t)?;
-    let mut g = generate::Generator::new(&conf, &distro);
-    let (packages, ros_base) = select(&g)?;
-
-    clear_recipes_dir(&out)?;
-    fs::create_dir_all(&out)?;
+/// Every recipe of the distribution, in `out` (emptied first); how many.
+fn write_recipes(g: &mut generate::Generator, out: &Path) -> Result<usize> {
+    let (packages, ros_base) = select(g)?;
+    clear_recipes_dir(out)?;
+    fs::create_dir_all(out)?;
     let mut n = 0;
     for ros in &packages {
         let Some(dir) = g.package(ros, &ros_base)? else {
             continue;
         };
-        dir.write(&out)?;
+        dir.write(out)?;
         n += 1;
         if let Some(alias) = g.alias(ros, &dir.recipe) {
-            alias.write(&out)?;
+            alias.write(out)?;
             n += 1;
         }
     }
     if let Some(m) = g.mutex() {
-        m.write(&out)?;
+        m.write(out)?;
         n += 1;
     }
+    Ok(n)
+}
+
+fn generate_cmd(t: Target, out: PathBuf, variant_config: PathBuf, all: bool) -> Result<()> {
+    let t0 = Instant::now();
+    let (conf, distro) = load(&t)?;
+    let mut g = generate::Generator::new(&conf, &distro);
+    let n = write_recipes(&mut g, &out)?;
     eprintln!("{n} recipes generated in {:.1?}", t0.elapsed());
     if !g.unsatisfied.is_empty() {
         eprintln!("unsatisfied: {}", g.unsatisfied.iter().cloned().collect::<Vec<_>>().join(", "));

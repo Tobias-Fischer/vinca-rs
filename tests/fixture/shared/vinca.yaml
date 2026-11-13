@@ -1,0 +1,12 @@
+# The layer every distribution of the fixture extends (as RoboStack's shared/).
+package_name_mode: both
+conditional_python_dependency: true
+build_number: 3
+conda_index: [robostack.yaml]
+patch_dir: patch
+mutex_package:
+  name: ros2-distro-mutex
+  version: 0.7.0
+  upper_bound: x.x
+  run_constraints: ["libfoo-linux 1.*"]
+packages_select_by_deps: [demo_py, demo_wrapped]

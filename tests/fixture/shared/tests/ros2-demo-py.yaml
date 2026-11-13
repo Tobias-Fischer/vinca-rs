@@ -1,0 +1,6 @@
+tests:
+  - script: [python -c "import demo_py"]
+    requirements: {run: [pytest]}
+  - if: linux and ros_distro == "humble"
+    then:
+      - script: [echo linux-humble]

@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json
+
+package:
+  name: ros2-ament-cmake
+  version: 1.3.0
+source:
+  git: https://github.com/ros2-gbp/ament_cmake-release.git
+  tag: release/humble/ament_cmake/1.3.0-1
+  target_directory: ros2-ament-cmake/src/work
+build:
+  number: 3
+  script: bld_ament_cmake.bat
+  post_process:
+  - files:
+    - '*.pc'
+    regex: (?:-L|-I)?"?([^;\s]+/sysroot/)
+    replacement: $$(CONDA_BUILD_SYSROOT_S)
+  - files:
+    - '*.cmake'
+    regex: ([^;\s"]+/sysroot)
+    replacement: $$ENV{CONDA_BUILD_SYSROOT}
+  - files:
+    - '*.cmake'
+    regex: ([^;\s"]+/MacOSX\d*\.?\d*\.sdk)
+    replacement: $$ENV{CONDA_BUILD_SYSROOT}
+requirements:
+  build:
+  - ${{ compiler('cxx') }}
+  - ${{ compiler('c') }}
+  - ${{ stdlib('c') }}
+  - ninja
+  - python ${{ python_min | default('3.11') }}.*
+  - setuptools
+  - git
+  - git-lfs
+  - m2-patch
+  - cmake
+  - cython
+  - if: build_platform != target_platform
+    then:
+    - pkg-config
+  - if: build_platform != target_platform
+    then:
+    - python ${{ python_min | default('3.11') }}.*
+  - if: build_platform != target_platform
+    then:
+    - cross-python_${{ target_platform }}
+  - if: build_platform != target_platform
+    then:
+    - numpy
+  host:
+  - ros2-distro-mutex 0.7.* humble_*
+  - ros2-ros-environment
+  - ros2-ros-workspace
+  - if: build_platform == target_platform
+    then:
+    - pkg-config
+  run:
+  - ros2-distro-mutex 0.7.* humble_*
+  - ros2-ros-workspace
+tests:
+- package_contents:
+    files:
+    - Library/share/ament_cmake/package.xml
+- package_contents:
+    strict: false
+    files:
+      not_exists:
+      - '**/site-packages/**'
+      - '**/*.cpython-*.so'
+      - '**/*.pyd'
+about:
+  license: Apache-2.0
+  summary: The entry point package for the ament buildsystem in CMake.
+extra:
+  recipe-maintainers:
+  - ros-forge

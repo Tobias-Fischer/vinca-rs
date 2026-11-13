@@ -330,7 +330,12 @@ impl Distro {
     pub fn load(conf: &Config) -> Result<Self> {
         let client = client()?;
         let rd = Rosdistro::load(&client, &conf.ros_distro, None)?;
-        Ok(Self {
+        Ok(Self::new(conf, rd, client))
+    }
+
+    /// From an already loaded rosdistro (e.g. a test's, without network).
+    pub fn new(conf: &Config, rd: Rosdistro, client: reqwest::blocking::Client) -> Self {
+        Self {
             name: conf.ros_distro.clone(),
             ros1: rd.ros1,
             condition_env: rd.condition_env(&conf.ros_distro),
@@ -340,7 +345,7 @@ impl Distro {
             live: rd.releases,
             fetched: Mutex::new(HashMap::new()),
             client,
-        })
+        }
     }
 
     pub fn entry(&self, pkg: &str) -> Option<&SnapshotEntry> {
