@@ -5,7 +5,7 @@
 //! deprecated ones (`packages_skip_by_deps`, `build_all`, `variants_mode`,
 //! string-form `mutex_package`, remote `conda_index`, ...) are errors, as are typos.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -16,6 +16,9 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 use thiserror::Error;
+
+use pixi_build_ros::config::PackageMappingSource;
+use pixi_build_ros::package_map::{PackageMapEntry, PackageMapError, load_package_map_data};
 
 use crate::selectors::evaluate_for_platform;
 
@@ -35,6 +38,9 @@ pub enum Error {
         "rosdistro_additional_recipes.yaml replaces released packages without `override: <reason>`:\n{0}"
     )]
     UnexplainedOverrides(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageMap(#[from] PackageMapError),
     #[error("patch {} is not named <package>.patch or <package>.<platform>.patch", .0.display())]
     #[diagnostic(help("the platform is one of osx, linux, win, emscripten or unix (linux and osx)"))]
     PatchName(PathBuf),
@@ -128,22 +134,8 @@ pub struct SnapshotEntry {
     pub override_reason: Option<String>,
 }
 
-/// `robostack:` of a conda_index entry: for every platform, or per platform
-/// (`linux`, `osx`, `win64`, `emscripten` or a conda subdir). Other keys (rosdep
-/// systems) are ignored.
-#[derive(Debug, Deserialize, Clone)]
-pub struct CondaIndexEntry {
-    pub robostack: Option<PlatformList>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum PlatformList {
-    All(Vec<String>),
-    PerPlatform(BTreeMap<String, Option<Vec<String>>>),
-}
-
-pub type CondaIndex = HashMap<String, CondaIndexEntry>;
+/// The rosdep mappings (conda_index files), by key; pixi-build-ros resolves them.
+pub type PackageMap = HashMap<String, PackageMapEntry>;
 
 /// Which target platforms a patch applies to (`<package>[.<platform>].patch`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -246,9 +238,9 @@ pub struct Config {
     /// the per-package entries of the distribution's own layers (not of the base one)
     #[serde(skip)]
     own_entries: BTreeSet<(&'static str, String)>,
-    /// conda_index files, the extending configuration's first
+    /// the conda_index files' mappings, the extending configuration's over the others
     #[serde(skip)]
-    pub conda_indexes: Vec<CondaIndex>,
+    pub package_map: PackageMap,
     /// rosdistro snapshot + additional recipes (which win)
     #[serde(skip)]
     pub snapshot: IndexMap<String, SnapshotEntry>,
@@ -436,6 +428,7 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
 
     let mut depmods = Mapping::new();
     let mut additional_info = Mapping::new();
+    let mut conda_indexes = vec![];
     for (i, (dir, layer)) in layers.iter().enumerate() {
         // the distribution's own entries, checked against its packages: those of every
         // layer but the one the others extend (shared by every distribution)
@@ -479,11 +472,12 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
             if !p.is_file() {
                 return Err(Error::CondaIndexNotAFile { name: i, dir: dir.clone() });
             }
-            layer_indexes.push(typed::<CondaIndex>(load_yaml(&p)?, &p)?);
+            layer_indexes.push(PackageMappingSource::File { path: p });
         }
-        layer_indexes.append(&mut conf.conda_indexes);
-        conf.conda_indexes = layer_indexes;
+        layer_indexes.append(&mut conda_indexes);
+        conda_indexes = layer_indexes;
     }
+    conf.package_map = load_package_map_data(&conda_indexes)?;
     conf.depmods = typed(Value::Mapping(depmods), Path::new("patch/dependencies.yaml"))?;
     conf.additional_info = typed(Value::Mapping(additional_info), Path::new("pkg_additional_info.yaml"))?;
 
