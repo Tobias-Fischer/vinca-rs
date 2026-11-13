@@ -52,7 +52,7 @@ jobs:
           run-install: false
       - run: pixi exec rattler-build upload prefix --channel robostack-tools --skip-existing --generate-attestation dist/*.conda
   release:
-    needs: build
+    needs: [build, publish]  # no release whose packages aren't on the channel
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
