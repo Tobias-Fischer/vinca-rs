@@ -71,6 +71,10 @@ enum Command {
         /// template variables, name=value: @name@ in the template
         #[arg(long = "var", value_parser = parse_var)]
         vars: Vec<(String, String)>,
+        /// the CI runs each stage after the whole previous one (e.g. fixed matrix
+        /// slots), not each job after its needs: schedule for that
+        #[arg(long)]
+        stage_barriers: bool,
     },
     /// Pin a distribution's releases and their dependencies (rosdistro_snapshot.yaml)
     Snapshot {
@@ -237,6 +241,7 @@ fn main() -> Result<()> {
             max_batch,
             timings,
             vars,
+            stage_barriers,
         } => {
             if out.is_none() && json.is_none() {
                 bail!("nothing to write: give --out (with --template) and/or --json");
@@ -251,6 +256,7 @@ fn main() -> Result<()> {
                 max_batch,
                 timings,
                 vars,
+                stage_barriers,
             };
             let outputs = workflow::Outputs {
                 template: template.as_deref(),

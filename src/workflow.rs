@@ -36,6 +36,9 @@ pub struct Options {
     pub max_batch: usize,
     pub timings: Timings,
     pub vars: Vec<(String, String)>,
+    /// the jobs run in stages that each wait for the whole previous one (e.g.
+    /// fixed matrix slots), not only for their needs: schedule for that
+    pub stage_barriers: bool,
 }
 
 struct Recipe {
@@ -437,7 +440,7 @@ pub fn generate(recipes_dir: &Path, outputs: &Outputs, opts: &Options) -> Result
             .as_ref()
             .map(|t| render(t, &jobs, &recipes))
             .transpose()?;
-        let span = simulate(&jobs, &recipes, &clock);
+        let span = simulate(&jobs, &recipes, &clock, opts.stage_barriers);
         let size = yaml.as_ref().map_or(0, String::len);
         if std::env::var_os("VINCA_RS_DEBUG").is_some() {
             eprintln!(
@@ -493,8 +496,8 @@ fn job_needs(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> Vec<BT
         .collect()
 }
 
-fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serde_json::Value {
-    let needs = job_needs(jobs, recipes);
+/// Each job's stage: one more than its latest need's.
+fn job_stages(needs: &[BTreeSet<usize>]) -> Vec<usize> {
     fn stage_of(i: usize, needs: &[BTreeSet<usize>], memo: &mut [Option<usize>]) -> usize {
         if let Some(s) = memo[i] {
             return s;
@@ -507,8 +510,13 @@ fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serd
         memo[i] = Some(s);
         s
     }
-    let mut memo = vec![None; jobs.len()];
-    let stage: Vec<usize> = (0..jobs.len()).map(|i| stage_of(i, &needs, &mut memo)).collect();
+    let mut memo = vec![None; needs.len()];
+    (0..needs.len()).map(|i| stage_of(i, needs, &mut memo)).collect()
+}
+
+fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serde_json::Value {
+    let needs = job_needs(jobs, recipes);
+    let stage = job_stages(&needs);
     // ids as RoboStack/vinca#201 writes them: stage_<stage>_job_<index in the stage>
     let mut id = vec![String::new(); jobs.len()];
     let mut count = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
@@ -530,22 +538,13 @@ fn stages_json(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>) -> serd
 
 /// When the last job ends: a job starts once its needs are done and a runner is
 /// free (earliest-created first), and takes the overhead plus its recipes' times.
-fn simulate(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>, clock: &Clock) -> f64 {
-    let owner: HashMap<&String, usize> = jobs
-        .iter()
-        .enumerate()
-        .flat_map(|(i, j)| j.iter().map(move |p| (p, i)))
-        .collect();
-    let needs: Vec<BTreeSet<usize>> = jobs
-        .iter()
-        .enumerate()
-        .map(|(i, j)| {
-            j.iter()
-                .flat_map(|p| recipes[p].deps.iter().map(|d| owner[d]))
-                .filter(|&o| o != i)
-                .collect()
-        })
-        .collect();
+fn simulate(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>, clock: &Clock, barriers: bool) -> f64 {
+    let needs = job_needs(jobs, recipes);
+    let stage = job_stages(&needs);
+    let mut open_in_stage = vec![0usize; stage.iter().max().map_or(0, |m| m + 1)];
+    for &s in &stage {
+        open_in_stage[s] += 1;
+    }
     let mut done = vec![false; jobs.len()];
     let mut started = vec![false; jobs.len()];
     let mut running: Vec<(f64, usize)> = vec![];
@@ -556,7 +555,12 @@ fn simulate(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>, clock: &Cl
             if running.len() >= clock.runners {
                 break;
             }
-            if !started[i] && needs[i].iter().all(|&n| done[n]) {
+            let ready = if barriers {
+                open_in_stage[..stage[i]].iter().all(|&n| n == 0)
+            } else {
+                needs[i].iter().all(|&n| done[n])
+            };
+            if !started[i] && ready {
                 started[i] = true;
                 running.push((now + clock.job(&jobs[i]), i));
             }
@@ -567,6 +571,7 @@ fn simulate(jobs: &[Vec<String>], recipes: &BTreeMap<String, Recipe>, clock: &Cl
         let (t, i) = running.swap_remove(k);
         now = t;
         done[i] = true;
+        open_in_stage[stage[i]] -= 1;
         left -= 1;
     }
     now
