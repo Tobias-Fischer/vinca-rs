@@ -22,6 +22,10 @@ pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "b6
 rattler_build_recipe = "0.1.24"
 rattler_build_variant_config = "0.1.24"
 rattler_conda_types = { version = "0.58", default-features = false }
+# pixi's repodata fetching: sharded repodata, compression, HTTP caching
+rattler_repodata_gateway = { version = "0.38", default-features = false, features = ["gateway", "rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"
 rayon = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 roxmltree = "0.21"

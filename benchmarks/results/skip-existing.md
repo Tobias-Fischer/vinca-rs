@@ -1,4 +1,4 @@
 | Command | Mean Wall Time [s] | Change | Factor |
 |:---|---:|---:|:---|
-| `vinca -m (skip_existing)` | 31.842 ± 4.348 |  |  |
-| `vinca-rs generate (skip_existing)` | 8.672 ± 4.405 | -72.8% | (3.7x faster) |
+| `vinca -m (skip_existing)` | 35.167 ± 11.812 |  |  |
+| `vinca-rs generate (skip_existing)` | 4.801 ± 0.645 | -86.3% | (7.3x faster) |

@@ -8450,6 +8450,7 @@ dependencies = [
  "rattler_build_recipe",
  "rattler_build_variant_config",
  "rattler_conda_types",
+ "rattler_repodata_gateway",
  "rayon",
  "reqwest 0.12.28",
  "roxmltree",
@@ -8458,6 +8459,8 @@ dependencies = [
  "serde_yaml",
  "spdx 0.10.9",
  "tempfile",
+ "tokio",
+ "url",
 ]
 
 [[package]]

@@ -89,6 +89,10 @@ enum Command {
         package: Option<String>,
         #[arg(long, short, default_value = "rosdistro_snapshot.yaml")]
         out: PathBuf,
+        /// don't snapshot again: add the dependencies to the entries of `out` that
+        /// have none, from their pinned releases (versions stay as they are)
+        #[arg(long)]
+        fill_dependencies: bool,
     },
     /// The requirements of every selected package for a platform, as JSON
     Requirements {
@@ -189,7 +193,11 @@ fn generate_cmd(
         );
     }
     if !all && !conf.skip_existing.is_empty() {
-        let published = skip_existing::published(&conf.skip_existing, &platform, &conf.ros_distro)?;
+        // the generated recipes' names (one directory per recipe)
+        let names: Vec<String> = std::fs::read_dir(&out)?
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .collect();
+        let published = skip_existing::published(&conf.skip_existing, &platform, &conf.ros_distro, &names)?;
         let variants = variant_config.is_file().then_some(variant_config.as_path());
         let removed = skip_existing::remove_built(&out, &platform, variants, &published)?;
         eprintln!(
@@ -276,7 +284,14 @@ fn main() -> Result<()> {
             rosdistro_ref,
             package,
             out,
-        } => snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out),
+            fill_dependencies,
+        } => {
+            if fill_dependencies {
+                snapshot::fill_dependencies(&distro, &out)
+            } else {
+                snapshot::write(&distro, rosdistro_ref.as_deref(), package.as_deref(), &out)
+            }
+        }
         Command::Requirements {
             config,
             platform,

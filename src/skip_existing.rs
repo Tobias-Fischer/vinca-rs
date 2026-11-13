@@ -5,7 +5,7 @@
 //! recipes are rendered with rattler-build's own crates against the variant
 //! config to get those build strings, as built natively on the target platform.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -13,25 +13,14 @@ use anyhow::{Context, Result, anyhow};
 use rattler_build_recipe::RenderConfig;
 use rattler_conda_types::Subdir;
 use rayon::prelude::*;
-use serde::Deserialize;
 
 pub type Build = (String, String, String);
 
-#[derive(Deserialize)]
 struct Record {
     name: String,
     version: String,
     build: String,
-    #[serde(default)]
     depends: Vec<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct Repodata {
-    #[serde(default)]
-    packages: HashMap<String, Record>,
-    #[serde(default, rename = "packages.conda")]
-    packages_conda: HashMap<String, Record>,
 }
 
 /// ROS 2 packages share their names across distributions (ros2-*): only builds
@@ -51,31 +40,52 @@ fn built_for_distro(r: &Record, distro: &str) -> bool {
             .any(|d| d.contains(&format!(" {distro}_")) || d.ends_with(&format!(" {distro}")))
 }
 
-/// (name, version, build string) of every build of `distro` on the channels.
-pub fn published(channels: &[String], platform: &str, distro: &str) -> Result<HashSet<Build>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("vinca-rs")
-        .build()?;
-    let mut out = HashSet::new();
-    for channel in channels {
-        for subdir in [platform, "noarch"] {
-            let url = format!("{}/{subdir}/repodata.json", channel.trim_end_matches('/'));
-            let resp = client.get(&url).send().with_context(|| url.clone())?;
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                continue;
+/// (name, version, build string) of the builds of `names` for `distro` on the
+/// channels. Fetched with pixi's repodata gateway (rattler): only the packages'
+/// shards where the channel is sharded (prefix.dev), else its compressed
+/// repodata, in parallel and cached (HTTP caching) in rattler's cache, which
+/// pixi and rattler-build share.
+pub fn published(
+    channels: &[String],
+    platform: &str,
+    distro: &str,
+    names: &[String],
+) -> Result<HashSet<Build>> {
+    use rattler_conda_types::{Channel, PackageName};
+    use rattler_repodata_gateway::Gateway;
+
+    let subdir = Subdir::from_str(platform).map_err(|e| anyhow!("{platform}: {e}"))?;
+    let channels: Vec<Channel> = channels
+        .iter()
+        .map(|c| Ok(Channel::from_url(url::Url::parse(c).with_context(|| c.clone())?)))
+        .collect::<Result<_>>()?;
+    let names: Vec<PackageName> = names
+        .iter()
+        .filter_map(|n| PackageName::from_str(n).ok())
+        .collect();
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let output = runtime.block_on(async {
+        Gateway::new()
+            .query(channels, [subdir, Subdir::NoArch], names)
+            .recursive(false)
+            .await
+    })?;
+    Ok(output
+        .repodata
+        .iter()
+        .flat_map(|repodata| repodata.iter())
+        .map(|r| {
+            let p = &r.package_record;
+            Record {
+                name: p.name.as_normalized().to_string(),
+                version: p.version.to_string(),
+                build: p.build.to_string(),
+                depends: p.depends.clone(),
             }
-            let repodata: Repodata = resp.error_for_status()?.json().with_context(|| url.clone())?;
-            out.extend(
-                repodata
-                    .packages
-                    .into_values()
-                    .chain(repodata.packages_conda.into_values())
-                    .filter(|r| built_for_distro(r, distro))
-                    .map(|r| (r.name, r.version, r.build)),
-            );
-        }
-    }
-    Ok(out)
+        })
+        .filter(|r| built_for_distro(r, distro))
+        .map(|r| (r.name, r.version, r.build))
+        .collect())
 }
 
 /// Every output (variant) a recipe builds.

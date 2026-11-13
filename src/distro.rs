@@ -348,7 +348,8 @@ impl Distro {
             Some(d) => Ok(d.into_iter().collect()),
             None => bail!(
                 "the snapshot entry of {pkg} has no dependencies: regenerate the snapshot \
-                 (`vinca-rs snapshot --distro <distro>`)"
+                 (`vinca-rs snapshot --distro <distro>`), or add the dependencies from the \
+                 pinned releases (`vinca-rs snapshot --distro <distro> --fill-dependencies`)"
             ),
         }
     }

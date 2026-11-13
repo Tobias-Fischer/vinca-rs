@@ -37,6 +37,10 @@ fn is_release_repo(url: &str) -> bool {
 /// The direct dependencies of a package that are released in the distribution:
 /// every dependency type (`depend` included), conditions evaluated.
 fn direct_depends(xml: &PackageXml, rd: &Rosdistro) -> BTreeSet<String> {
+    direct_depends_in(xml, &|n| rd.releases.contains_key(n))
+}
+
+fn direct_depends_in(xml: &PackageXml, released: &dyn Fn(&str) -> bool) -> BTreeSet<String> {
     let d = &xml.dependencies;
     [
         &d.buildtool_depends,
@@ -50,7 +54,7 @@ fn direct_depends(xml: &PackageXml, rd: &Rosdistro) -> BTreeSet<String> {
     ]
     .into_iter()
     .flatten()
-    .filter(|dep| dep.is_active() && rd.releases.contains_key(&dep.name))
+    .filter(|dep| dep.is_active() && released(&dep.name))
     .map(|dep| dep.name.clone())
     .collect()
 }
@@ -118,5 +122,70 @@ pub fn write(distro: &str, rosdistro_ref: Option<&str>, package: Option<&str>, o
     std::fs::write(out, header + &serde_yaml::to_string(&snapshot)?)
         .with_context(|| out.display().to_string())?;
     eprintln!("{} packages written to {}", snapshot.len(), out.display());
+    Ok(())
+}
+
+/// Add the dependencies to the entries of an existing snapshot that have none
+/// (written before vinca-snapshot recorded them), from the package.xml of each
+/// entry's pinned release; versions and everything else stay as they are.
+pub fn fill_dependencies(distro: &str, path: &Path) -> Result<()> {
+    use serde_yaml::{Mapping, Value};
+    let client = client()?;
+    let rd = Rosdistro::load(&client, distro, None)?;
+    let env = rd.condition_env(distro);
+    let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+    let header: String = text
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let mut snapshot: Mapping = serde_yaml::from_str(&text)?;
+    let names: BTreeSet<String> = snapshot
+        .keys()
+        .filter_map(|k| k.as_str().map(String::from))
+        .collect();
+    let released = |n: &str| names.contains(n) || rd.releases.contains_key(n);
+    let missing: Vec<(String, crate::config::SnapshotEntry)> = snapshot
+        .iter()
+        .filter(|(_, v)| v.get("dependencies").is_none())
+        .map(|(k, v)| {
+            Ok((
+                k.as_str().unwrap_or_default().to_string(),
+                serde_yaml::from_value(v.clone())?,
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let filled: Vec<(String, Result<Vec<String>>)> = missing
+        .into_par_iter()
+        .map(|(pkg, entry)| {
+            let deps = (|| {
+                let url = crate::distro::Distro::raw_url(&entry)?;
+                let xml = client.get(&url).send()?.error_for_status()?.text()?;
+                let xml = PackageXml::parse(&xml)
+                    .map_err(|e| anyhow::anyhow!("{pkg}: {e}"))?
+                    .evaluate_conditions(&env);
+                Ok(direct_depends_in(&xml, &released).into_iter().collect())
+            })();
+            (pkg, deps)
+        })
+        .collect();
+    let mut n = 0;
+    for (pkg, deps) in filled {
+        let deps = deps.with_context(|| format!("{pkg}: reading its package.xml"))?;
+        let entry = snapshot
+            .get_mut(pkg.as_str())
+            .and_then(Value::as_mapping_mut)
+            .unwrap();
+        let mut with = Mapping::new();
+        with.insert(
+            "dependencies".into(),
+            Value::Sequence(deps.into_iter().map(Value::String).collect()),
+        );
+        with.extend(std::mem::take(entry));
+        *entry = with;
+        n += 1;
+    }
+    std::fs::write(path, header + &serde_yaml::to_string(&snapshot)?)?;
+    eprintln!("dependencies added to {n} entries of {}", path.display());
     Ok(())
 }

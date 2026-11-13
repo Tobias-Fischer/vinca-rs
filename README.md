@@ -113,12 +113,16 @@ in CI. `benchmarks/run.sh <robostack checkout>` reproduces it; the tables are in
 | task | vinca | vinca-rs | |
 |---|---:|---:|---:|
 | generate every recipe (`vinca -m`) | 40.1 s ± 21.9 | 2.0 s ± 0.04 | **20x** |
-| generate, skipping published builds (`skip_existing`) | 31.8 s ± 4.3 | 8.7 s ± 4.4 | **3.7x** |
+| generate, skipping published builds (`skip_existing`) | 35.2 s ± 11.8 | 4.8 s ± 0.6 | **7.3x** |
 | plan the full-rebuild workflow (`vinca-gha`) | 8.1 s ± 0.1 | 0.35 s ± 0.04 | **23x** |
 | snapshot rosdistro at a sync tag (`vinca-snapshot`) | 3.4 min ± 1.4 | 0.2 min ± 0.2 | **21x** |
 
-Skip-existing is dominated by downloading the channel's repodata and rendering every
-recipe with rattler-build's crates (in parallel).
+Skip-existing fetches the channel's records of the generated packages with pixi's
+repodata gateway (rattler): compressed or sharded repodata, fetched in parallel and
+cached with HTTP caching in rattler's cache, which pixi and rattler-build share. Cold it
+takes ~6 s for humble's 2531 recipes (anaconda.org), warm ~3.5 s: 2 s of generation and
+~1.5 s of rendering every recipe with rattler-build's crates (in parallel) for its build
+strings.
 
 ## Development
 
