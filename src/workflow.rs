@@ -133,8 +133,8 @@ fn read_recipes(dir: &Path) -> Result<BTreeMap<String, Recipe>> {
                 names(&t["requirements"]["build"], &mut deps);
             }
         }
-        let script = r["build"].get("script").and_then(Value::as_str).unwrap_or("");
-        out.insert(name, Recipe { deps, trivial: script.is_empty() });
+        let trivial = r["build"].get("script").is_none_or(|s| s.as_str() == Some(""));
+        out.insert(name, Recipe { deps, trivial });
     }
     // only the recipes being built order the jobs
     let built: BTreeSet<String> = out.keys().cloned().collect();

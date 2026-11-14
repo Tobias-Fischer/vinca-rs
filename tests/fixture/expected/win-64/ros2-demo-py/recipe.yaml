@@ -9,7 +9,9 @@ source:
   target_directory: ros2-demo-py/src/work
 build:
   number: 7
-  script: bld_ament_python.bat
+  script:
+    file: build_ament_python.sh
+    interpreter: brush
   post_process:
   - files:
     - '*.pc'
@@ -34,6 +36,7 @@ requirements:
   - git
   - git-lfs
   - m2-patch
+  - brush
   - cmake
   - cython
   - if: build_platform != target_platform

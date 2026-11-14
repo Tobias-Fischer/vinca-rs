@@ -12,7 +12,9 @@ source:
   - patch/ros2-demo-cpp.win.patch
 build:
   number: 3
-  script: bld_ament_cmake.bat
+  script:
+    file: build_ament_cmake.sh
+    interpreter: brush
   post_process:
   - files:
     - '*.pc'
@@ -37,6 +39,7 @@ requirements:
   - git
   - git-lfs
   - m2-patch
+  - brush
   - cmake
   - cython
   - if: build_platform != target_platform
