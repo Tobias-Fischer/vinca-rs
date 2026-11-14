@@ -44,11 +44,12 @@ release is published there), `pixi build`, or a source dependency of another pix
 ## Configuration
 
 `vinca.yaml` can `extend` another one: package lists are combined, `mutex_package`
-is merged, other keys are replaced. Next to each layer: `patch/` (patches and
-`dependencies.yaml`), `tests/`, `files/<pkg>/` (copied into that package's recipe
-directory, e.g. `ros_workspace`'s activation scripts), `pkg_additional_info.yaml`,
-and the `conda_index` files (`robostack.yaml`). Patches are `<pkg>.patch` or `<pkg>.<platform>.patch`
-(`osx`, `linux`, `win`, `emscripten`, `unix`); `<pkg>` there and in the other files
+is merged, other keys are replaced. Next to each layer: `patch/` (patches), `tests/`,
+`files/<pkg>/` (copied into that package's recipe directory, e.g. `ros_workspace`'s
+activation scripts), `pkg_additional_info.yaml` (per package: `build_number`,
+`additional_cmake_args`, dependency fixes `add_host`/`remove_run`/…), and the
+`conda_index` files (`robostack.yaml`). Patches are `<pkg>.patch` or
+`<pkg>.<platform>.patch` (`osx`, `linux`, `win`, `emscripten`, `unix`); `<pkg>` there and in the other files
 is a ROS or conda name. Entries for packages that aren't in the distribution are
 warned about. Selectors (`if`/`then`/`else`) are resolved for the target
 platform. Unknown keys are errors.
@@ -149,9 +150,9 @@ Data flow of `generate`, one module each:
 
 | module | |
 |---|---|
-| `config` | the `vinca.yaml` layers (`extends`), selectors resolved for the platform, and per layer the patches, tests, `dependencies.yaml`, `pkg_additional_info.yaml` and `conda_index` files, keyed by `package_key` (the ROS name) |
+| `config` | the `vinca.yaml` layers (`extends`), selectors resolved for the platform, and per layer the patches, tests, `pkg_additional_info.yaml` and `conda_index` files, keyed by `package_key` (the ROS name) |
 | `distro` | the snapshot (versions, sources, dependency graph) and the package.xml files: rosdistro's release cache, else the pinned tag on GitHub; REP 149 conditions in a fixed environment |
-| `generate` | selection, rosdep → conda names, RoboStack's per-package configuration (dependencies.yaml, tests, sources), aliases, wrappers and the mutex |
+| `generate` | selection, rosdep → conda names, RoboStack's per-package configuration (dependency fixes, tests, sources), aliases, wrappers and the mutex |
 | `recipe` | the typed recipe and its directory (recipe.yaml, scripts, patches, test files) |
 | `skip_existing` | drops the recipes whose builds are on the `skip_existing` channels |
 | `workflow` | jobs, their needs and the GitHub Actions workflow, from a directory of recipes (no network) |

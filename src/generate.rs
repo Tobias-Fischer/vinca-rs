@@ -88,7 +88,7 @@ impl<'a> Generator<'a> {
         format!("ros-{}-{}", self.distro.name, ros.replace('_', "-"))
     }
 
-    /// dependencies.yaml entries may use legacy names
+    /// dependency fixes may use legacy names
     fn normalize(&self, spec: &str) -> String {
         let legacy = format!("ros-{}-", self.distro.name);
         match spec.strip_prefix(&legacy) {
@@ -282,7 +282,7 @@ impl<'a> Generator<'a> {
         let mut reqs =
             rules.requirements(&xml, build_type, &groups, |dep, kind| self.resolve(&dep.name, kind))?;
 
-        // patch/dependencies.yaml
+        // the dependency fixes (add_*/remove_* in pkg_additional_info.yaml)
         if let Some(m) = self.conf.depmods(ros).cloned() {
             for (list, add, remove) in [
                 (&mut reqs.build, &m.add_build, &m.remove_build),
@@ -299,7 +299,7 @@ impl<'a> Generator<'a> {
             }
         }
 
-        // after dependencies.yaml, which can give a package Python (e.g. one that
+        // after the dependency fixes, which can give a package Python (e.g. one that
         // embeds the interpreter)
         let python_free = rules.finish(&mut reqs);
 

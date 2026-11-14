@@ -174,9 +174,8 @@ impl PatchTarget {
 /// Per package (`package_key`), the patches of each target.
 pub type Patches = HashMap<String, HashMap<PatchTarget, Vec<PathBuf>>>;
 
-/// The one name per-package files (patches, tests, dependencies.yaml,
-/// pkg_additional_info.yaml) are keyed and looked up by: the ROS package name,
-/// with underscores. A conda name (`ros-<distro>-<pkg>`, `ros2-<pkg>`,
+/// The one name per-package files (patches, tests, pkg_additional_info.yaml) are
+/// keyed and looked up by: the ROS package name, with underscores. A conda name (`ros-<distro>-<pkg>`, `ros2-<pkg>`,
 /// `ros-<pkg>`) loses its prefix.
 pub fn package_key(name: &str, distro: &str) -> String {
     let legacy = format!("ros-{distro}-");
@@ -439,7 +438,6 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
         conf.packages_exclude.iter().chain(&conf.packages_skip).map(|n| n.replace('-', "_")).collect();
     conf.packages_select_by_deps.retain(|n| !dropped.contains(&n.replace('-', "_")));
 
-    let mut depmods = Mapping::new();
     let mut additional_info = Mapping::new();
     let mut conda_indexes = vec![];
     for (i, (dir, layer)) in layers.iter().enumerate() {
@@ -458,12 +456,6 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
             let patches = discover_patches(&pd, &conf.ros_distro)?;
             note("patches", patches.keys().cloned().collect());
             conf.patches.extend(patches);
-            let deps = pd.join("dependencies.yaml");
-            if deps.exists() {
-                let own = by_package_key(selected_mapping(&deps, platform)?, &conf.ros_distro);
-                note("dependencies.yaml", own.keys().filter_map(|k| k.as_str().map(String::from)).collect());
-                merge_per_package(&mut depmods, &own);
-            }
         }
         let (t, f) = discover_tests(dir, &conf.ros_distro);
         note("tests", t.keys().chain(f.keys()).cloned().collect());
@@ -494,7 +486,21 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
         conda_indexes = layer_indexes;
     }
     conf.package_map = load_package_map_data(&conda_indexes)?;
-    conf.depmods = typed(Value::Mapping(depmods), Path::new("patch/dependencies.yaml"))?;
+    // a package's dependency fixes (add_*/remove_*) sit next to its other entries
+    let mut depmods = Mapping::new();
+    for (pkg, entry) in additional_info.iter_mut() {
+        let Value::Mapping(entry) = entry else { continue };
+        let fixes: Mapping = entry
+            .iter()
+            .filter(|(k, _)| k.as_str().is_some_and(|k| k.starts_with("add_") || k.starts_with("remove_")))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !fixes.is_empty() {
+            entry.retain(|k, _| !fixes.contains_key(k));
+            depmods.insert(pkg.clone(), Value::Mapping(fixes));
+        }
+    }
+    conf.depmods = typed(Value::Mapping(depmods), Path::new("pkg_additional_info.yaml"))?;
     conf.additional_info = typed(Value::Mapping(additional_info), Path::new("pkg_additional_info.yaml"))?;
 
     let load_snapshot = |p: &Option<String>| -> Result<IndexMap<String, SnapshotEntry>> {
@@ -587,13 +593,13 @@ impl Config {
         self.recipe_files.get(&self.key(name))
     }
 
-    /// The patch/dependencies.yaml entry of a package.
+    /// The dependency fixes (`add_*`/`remove_*` in pkg_additional_info.yaml) of a package.
     pub fn depmods(&self, name: &str) -> Option<&DepMods> {
         self.depmods.get(&self.key(name))
     }
 
     /// The distribution's own entries (its packages_select_by_deps, patches, tests,
-    /// dependencies.yaml, pkg_additional_info.yaml) for which `known` is false, e.g.
+    /// pkg_additional_info.yaml) for which `known` is false, e.g.
     /// typos or stale entries: "<where>: <package>".
     pub fn unmatched(&self, known: impl Fn(&str) -> bool) -> Vec<String> {
         self.own_entries.iter().filter(|(_, k)| !known(k)).map(|(w, k)| format!("{w}: {k}")).collect()
