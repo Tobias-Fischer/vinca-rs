@@ -15,7 +15,7 @@ c_stdlib_version = ["2.17"]
 # workspace (e.g. RoboStack's): vinca-rs = { git = "https://github.com/Tobias-Fischer/vinca-rs" }
 [package]
 name = "vinca-rs"
-version = "0.1.8"
+version = "0.1.9"
 
 [package.build.backend]
 name = "pixi-build-rust"

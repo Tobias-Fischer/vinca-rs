@@ -1,6 +1,6 @@
 [package]
 name = "vinca-rs"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "Conda (rattler-build) recipe and CI workflow generator for ROS distributions (RoboStack)"
 repository = "https://github.com/Tobias-Fischer/vinca-rs"
