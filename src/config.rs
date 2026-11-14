@@ -232,6 +232,8 @@ pub struct Config {
     #[serde(skip)]
     test_folders: HashMap<String, PathBuf>,
     #[serde(skip)]
+    recipe_files: HashMap<String, PathBuf>,
+    #[serde(skip)]
     depmods: HashMap<String, DepMods>,
     #[serde(skip)]
     additional_info: HashMap<String, PkgAdditionalInfo>,
@@ -392,6 +394,17 @@ fn discover_tests(dir: &Path, distro: &str) -> (HashMap<String, PathBuf>, HashMa
     (tests, folders)
 }
 
+/// `files/<package>/`: copied into that package's recipe directory.
+fn discover_recipe_files(dir: &Path, distro: &str) -> HashMap<String, PathBuf> {
+    let Ok(rd) = fs::read_dir(dir.join("files")) else {
+        return HashMap::new();
+    };
+    rd.filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .map(|p| (package_key(&p.file_name().unwrap().to_string_lossy(), distro), p))
+        .collect()
+}
+
 /// A per-package file's entries, by `package_key` (merged as `merge_per_package`).
 fn by_package_key(m: Mapping, distro: &str) -> Mapping {
     let mut out = Mapping::new();
@@ -456,6 +469,9 @@ pub fn read(path: &Path, platform: Subdir) -> Result<Config> {
         note("tests", t.keys().chain(f.keys()).cloned().collect());
         conf.tests.extend(t);
         conf.test_folders.extend(f);
+        let files = discover_recipe_files(dir, &conf.ros_distro);
+        note("files", files.keys().cloned().collect());
+        conf.recipe_files.extend(files);
         let info = dir.join("pkg_additional_info.yaml");
         if info.exists() {
             let own = by_package_key(selected_mapping(&info, platform)?, &conf.ros_distro);
@@ -564,6 +580,11 @@ impl Config {
     pub fn package_tests(&self, name: &str) -> (Option<&PathBuf>, Option<&PathBuf>) {
         let key = self.key(name);
         (self.tests.get(&key), self.test_folders.get(&key))
+    }
+
+    /// The folder whose files are copied into a package's recipe directory.
+    pub fn package_files(&self, name: &str) -> Option<&PathBuf> {
+        self.recipe_files.get(&self.key(name))
     }
 
     /// The patch/dependencies.yaml entry of a package.

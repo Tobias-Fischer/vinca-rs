@@ -8,9 +8,7 @@ use std::path::PathBuf;
 
 use fs_err as fs;
 use miette::Diagnostic;
-use pixi_build_ros::build_script::{
-    ACTIVATION_SCRIPTS, BuildMode, BuildType, ScriptVars, render_build_script, script_name,
-};
+use pixi_build_ros::build_script::{BuildMode, BuildType, ScriptVars, render_build_script, script_name};
 use pixi_build_ros::distro::RosVersion;
 use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
 use pixi_build_ros::package_xml::PackageXml;
@@ -354,9 +352,11 @@ impl<'a> Generator<'a> {
         files
             .scripts
             .push((script.to_string(), render_build_script(build_type, !unix, BuildMode::Clean, &vars)));
-        // ros_workspace installs the environment's activation scripts
-        if ros == "ros_workspace" {
-            files.scripts.extend(ACTIVATION_SCRIPTS.iter().map(|(n, s)| (n.to_string(), s.to_string())));
+        if let Some(dir) = self.conf.package_files(&conda) {
+            for e in fs::read_dir(dir)? {
+                let e = e?;
+                files.copies.push((PathBuf::from(e.file_name()), e.path()));
+            }
         }
         Ok(Some(RecipeDir { recipe, files }))
     }

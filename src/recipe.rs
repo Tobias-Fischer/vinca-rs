@@ -1,5 +1,5 @@
 //! The generated rattler-build recipe, typed, and how it is written to disk
-//! (recipe.yaml, build/activation scripts, patches, test files).
+//! (recipe.yaml, build scripts, patches, test and recipe files).
 
 use std::path::{Path, PathBuf};
 
