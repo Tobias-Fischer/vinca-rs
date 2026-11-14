@@ -78,11 +78,20 @@ pub struct Build {
     pub string: Option<String>,
     /// a build script next to the recipe; none: a package without content
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
+    pub script: Option<Script>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub noarch: Option<Noarch>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub post_process: Vec<PostProcess>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum Script {
+    /// the script's file, or its content (empty: nothing to build)
+    Plain(String),
+    /// a script run by an interpreter other than the platform's default
+    File { file: String, interpreter: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -150,7 +159,7 @@ impl Recipe {
             build: Build {
                 number,
                 string: None,
-                script: Some(String::new()),
+                script: Some(Script::Plain(String::new())),
                 noarch: None,
                 post_process: vec![],
             },
