@@ -45,8 +45,9 @@ release is published there), `pixi build`, or a source dependency of another pix
 
 `vinca.yaml` can `extend` another one: package lists are combined, `mutex_package`
 is merged, other keys are replaced. Next to each layer: `patch/` (patches and
-`dependencies.yaml`), `tests/`, `pkg_additional_info.yaml`, and the `conda_index`
-files (`robostack.yaml`). Patches are `<pkg>.patch` or `<pkg>.<platform>.patch`
+`dependencies.yaml`), `tests/`, `files/<pkg>/` (copied into that package's recipe
+directory, e.g. `ros_workspace`'s activation scripts), `pkg_additional_info.yaml`,
+and the `conda_index` files (`robostack.yaml`). Patches are `<pkg>.patch` or `<pkg>.<platform>.patch`
 (`osx`, `linux`, `win`, `emscripten`, `unix`); `<pkg>` there and in the other files
 is a ROS or conda name. Entries for packages that aren't in the distribution are
 warned about. Selectors (`if`/`then`/`else`) are resolved for the target

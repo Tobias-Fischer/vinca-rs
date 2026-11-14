@@ -22,7 +22,7 @@ minijinja = "2"
 # pixi-build-ros from the end of the unmerged pixi PRs (Tobias-Fischer/pixi
 # pixi-build-ros-requirements). Merge order: #7533 (shared lookup) and #7539 (names),
 # then #7540 (build scripts), then #7541 (requirement rules); repin to prefix-dev/pixi after.
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "35262ab09555c8c06274b384d4a7c951685bd545" }
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "ab454118bb154cf316a2de1881750085e163bf76" }
 # which builds are published: prefix-dev/rattler-build#2943, until merged
 rattler_build_core = { git = "https://github.com/Tobias-Fischer/rattler-build.git", rev = "44e5ee79dd2f845e6a87189ec006ad36b29910fa", default-features = false, features = ["rustls"] }
 rattler_build_recipe = "0.1.25"

@@ -14,7 +14,7 @@ use crate::distro::{Distro, LiveRelease, Rosdistro};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixture");
 
-/// Every file under `dir` but the build/activation scripts (rendered templates),
+/// Every file under `dir` but the scripts (rendered build templates),
 /// by relative path.
 fn files(dir: &Path) -> BTreeMap<PathBuf, String> {
     fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, String>) {
