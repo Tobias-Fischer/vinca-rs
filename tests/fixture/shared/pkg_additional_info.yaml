@@ -1,3 +1,11 @@
-demo_py: {build_number: 7}
+demo_cpp:
+  add_host: ["zlib"]
+  # by name: also the conditional (native-only) pkg-config
+  remove_host: ["pkg-config"]
+demo_py:
+  add_run:
+    - if: linux
+      then: ["libfoo-linux"]
+  build_number: 7
 demo_wrapped:
   generate_dummy_package_with_run_deps: {dep_name: libwrapped, max_pin: x.x}
