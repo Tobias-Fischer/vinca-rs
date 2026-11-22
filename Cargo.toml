@@ -22,8 +22,9 @@ minijinja = "2"
 # pixi-build-ros from the end of the unmerged pixi PRs (Tobias-Fischer/pixi
 # pixi-build-ros-requirements). Merge order: #7533 (shared lookup) and #7539 (names),
 # then #7540 (build scripts), then #7541 (requirement rules); repin to prefix-dev/pixi after.
-# + the catkin scripts' CMake arguments fix (branch pixi-build-ros-catkin-cmake-args, on top of it)
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "2d90277db29b13ad7638f82ae1978cff79da0ed8" }
+# + catkin script fixes (CMake arguments, Windows CMake policy minimum; branch
+# pixi-build-ros-catkin-cmake-args, on top of it)
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "3cb18be445098866616a698ccc7e810769d5db98" }
 # which builds are published: prefix-dev/rattler-build#2943, until merged
 rattler_build_core = { git = "https://github.com/Tobias-Fischer/rattler-build.git", rev = "44e5ee79dd2f845e6a87189ec006ad36b29910fa", default-features = false, features = ["rustls"] }
 rattler_build_recipe = "0.1.25"
