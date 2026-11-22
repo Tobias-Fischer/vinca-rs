@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use fs_err as fs;
 use miette::Diagnostic;
 use pixi_build_ros::build_script::{
-    BuildMode, BuildType, ScriptVars, is_batch, render_build_script, script_interpreter, script_name,
+    BuildMode, BuildType, ScriptVars, render_build_script, script_interpreter, script_name,
 };
 use pixi_build_ros::distro::RosVersion;
 use pixi_build_ros::package_map::{MappedPackages, PackageMapError, lookup};
@@ -261,7 +261,7 @@ impl<'a> Generator<'a> {
             }
         };
         let unix = !self.conf.platform.is_windows();
-        let script = script_name(build_type, !unix);
+        let script = script_name(build_type);
 
         let rules = Rules {
             package_prefix: self.prefix(),
@@ -306,7 +306,7 @@ impl<'a> Generator<'a> {
         let python_free = rules.finish(&mut reqs);
 
         let mut recipe = Recipe::new(&conda, &version, self.conf.build_number_for(&conda));
-        recipe.build.script = Some(match script_interpreter(build_type, !unix) {
+        recipe.build.script = Some(match script_interpreter(!unix) {
             Some(interpreter) => Script::File { file: script.into(), interpreter: interpreter.into() },
             None => Script::Plain(script.into()),
         });
@@ -342,7 +342,7 @@ impl<'a> Generator<'a> {
         let info = self.conf.info(&conda);
         let prefix = self.prefix();
         let folder = self.distro.additional_folder(ros);
-        let source_dir = source_dir(folder, is_batch(build_type, !unix));
+        let source_dir = source_dir(folder);
         let vars = ScriptVars {
             generator: "vinca-rs (https://github.com/Tobias-Fischer/vinca-rs)",
             source_dir: &source_dir,
@@ -352,7 +352,7 @@ impl<'a> Generator<'a> {
         };
         files
             .scripts
-            .push((script.to_string(), render_build_script(build_type, !unix, BuildMode::Clean, &vars)));
+            .push((script.to_string(), render_build_script(build_type, BuildMode::Clean, &vars)));
         if let Some(dir) = self.conf.package_files(&conda) {
             for e in fs::read_dir(dir)? {
                 let e = e?;
@@ -409,14 +409,8 @@ impl<'a> Generator<'a> {
 
 /// The checked-out sources, for the build script's double quotes: bash syntax
 /// (also for the ROS 2 scripts on Windows, run with brush) or a batch file's.
-fn source_dir(folder: &str, batch: bool) -> String {
-    let dir = if batch {
-        format!("%SRC_DIR%\\%PKG_NAME%\\src\\work\\{folder}")
-    } else {
-        format!("$SRC_DIR/$PKG_NAME/src/work/{folder}")
-    };
-    // in a batch file, `\"` would not close the quotes
-    dir.trim_end_matches(['/', '\\']).to_string()
+fn source_dir(folder: &str) -> String {
+    format!("$SRC_DIR/$PKG_NAME/src/work/{folder}").trim_end_matches('/').to_string()
 }
 
 #[cfg(test)]
@@ -425,8 +419,7 @@ mod tests {
 
     #[test]
     fn source_dir_syntax() {
-        assert_eq!(source_dir("", false), "$SRC_DIR/$PKG_NAME/src/work");
-        assert_eq!(source_dir("ws/pkg/", false), "$SRC_DIR/$PKG_NAME/src/work/ws/pkg");
-        assert_eq!(source_dir("", true), r"%SRC_DIR%\%PKG_NAME%\src\work");
+        assert_eq!(source_dir(""), "$SRC_DIR/$PKG_NAME/src/work");
+        assert_eq!(source_dir("ws/pkg/"), "$SRC_DIR/$PKG_NAME/src/work/ws/pkg");
     }
 }
