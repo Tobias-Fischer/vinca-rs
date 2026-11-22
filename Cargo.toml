@@ -20,9 +20,11 @@ miette = { version = "7", features = ["fancy"] }
 minijinja = "2"
 # package.xml parsing (REP 149 conditions)
 # pixi-build-ros from the end of the unmerged pixi PRs (Tobias-Fischer/pixi
-# pixi-build-ros-requirements). Merge order: #7533 (shared lookup) and #7539 (names),
-# then #7540 (build scripts), then #7541 (requirement rules); repin to prefix-dev/pixi after.
-pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "c3e774932fd3b2a647c0fac0623e7b52cd476cad" }
+# pixi-build-ros-requirements, plus the catkin commits of pixi-build-ros-catkin-brush:
+# pixi-build-ros-requirements-catkin-brush). Merge order: #7533 (shared lookup) and #7539
+# (names), then #7540 (build scripts), then #7541 (requirement rules); repin to
+# prefix-dev/pixi after.
+pixi-build-ros = { git = "https://github.com/Tobias-Fischer/pixi.git", rev = "03fb2f802d20d8abb3a81b116657f1ce8b0a372c" }
 # which builds are published: prefix-dev/rattler-build#2943, until merged
 rattler_build_core = { git = "https://github.com/Tobias-Fischer/rattler-build.git", rev = "44e5ee79dd2f845e6a87189ec006ad36b29910fa", default-features = false, features = ["rustls"] }
 rattler_build_recipe = "0.1.25"
